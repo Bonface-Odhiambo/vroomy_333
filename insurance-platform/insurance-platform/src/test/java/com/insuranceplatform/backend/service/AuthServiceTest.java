@@ -1,0 +1,1 @@
+package com.insuranceplatform.backend.service; public class AuthServiceTest {}

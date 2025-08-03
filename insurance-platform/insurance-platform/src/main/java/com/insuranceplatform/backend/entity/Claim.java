@@ -1,0 +1,1 @@
+package com.insuranceplatform.backend.entity; public class Claim {}

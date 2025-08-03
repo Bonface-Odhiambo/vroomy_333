@@ -1,0 +1,1 @@
+package com.insuranceplatform.backend.dto; public class ClaimRequest {}

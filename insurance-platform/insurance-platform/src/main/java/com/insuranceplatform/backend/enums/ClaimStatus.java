@@ -1,0 +1,1 @@
+package com.insuranceplatform.backend.enums; public enum ClaimStatus { RAISED, IN_REVIEW, APPROVED, REJECTED }

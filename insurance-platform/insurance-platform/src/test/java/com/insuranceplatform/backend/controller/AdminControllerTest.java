@@ -1,0 +1,1 @@
+package com.insuranceplatform.backend.controller; public class AdminControllerTest {}

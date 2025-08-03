@@ -1,0 +1,1 @@
+package com.insuranceplatform.backend.repository; public interface ClaimRepository {}

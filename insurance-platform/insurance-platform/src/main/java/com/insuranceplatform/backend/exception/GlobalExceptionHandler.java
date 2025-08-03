@@ -1,0 +1,1 @@
+package com.insuranceplatform.backend.exception; public class GlobalExceptionHandler {}
