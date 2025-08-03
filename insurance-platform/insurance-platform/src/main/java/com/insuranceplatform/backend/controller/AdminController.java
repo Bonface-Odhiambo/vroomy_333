@@ -1,8 +1,10 @@
 package com.insuranceplatform.backend.controller;
 
 import com.insuranceplatform.backend.dto.CompanyRequest;
+import com.insuranceplatform.backend.dto.DashboardMetricsDto;
 import com.insuranceplatform.backend.dto.TaxRateRequest;
 import com.insuranceplatform.backend.dto.UserStatusRequest;
+import com.insuranceplatform.backend.entity.ApiKey;
 import com.insuranceplatform.backend.entity.GlobalConfig;
 import com.insuranceplatform.backend.entity.InsuranceCompany;
 import com.insuranceplatform.backend.entity.User;
@@ -23,9 +25,17 @@ import java.util.List;
 public class AdminController {
 
     private final AdminService adminService;
-    private final ReportingService reportingService; // Injected for reporting
+    private final ReportingService reportingService;
 
-    // --- Insurance Company Endpoints ---
+    // --- Dashboard & Metrics ---
+
+    @GetMapping("/dashboard/metrics")
+    public ResponseEntity<DashboardMetricsDto> getDashboardMetrics() {
+        DashboardMetricsDto metrics = adminService.getDashboardMetrics();
+        return ResponseEntity.ok(metrics);
+    }
+
+    // --- Insurance Company Management ---
 
     @PostMapping("/companies")
     public ResponseEntity<InsuranceCompany> createCompany(@RequestBody CompanyRequest request) {
@@ -48,7 +58,14 @@ public class AdminController {
         return ResponseEntity.noContent().build();
     }
 
-    // --- Global Config Endpoints ---
+    // --- User Management ---
+
+    @PatchMapping("/users/{userId}/status")
+    public ResponseEntity<User> updateUserStatus(@PathVariable Long userId, @RequestBody UserStatusRequest request) {
+        return ResponseEntity.ok(adminService.updateUserStatus(userId, request));
+    }
+
+    // --- Global Configuration ---
 
     @PostMapping("/config/tax")
     public ResponseEntity<GlobalConfig> setTaxRate(@RequestBody TaxRateRequest request) {
@@ -60,27 +77,22 @@ public class AdminController {
         return ResponseEntity.ok(adminService.getGlobalConfig());
     }
 
-    // --- User Management Endpoints ---
+    // --- API Key Management for Data Sharing ---
 
-    @PatchMapping("/users/{userId}/status")
-    public ResponseEntity<User> updateUserStatus(@PathVariable Long userId, @RequestBody UserStatusRequest request) {
-        return ResponseEntity.ok(adminService.updateUserStatus(userId, request));
+    @PostMapping("/companies/{companyId}/generate-key")
+    public ResponseEntity<ApiKey> generateApiKey(@PathVariable Long companyId) {
+        ApiKey newKey = adminService.generateApiKey(companyId);
+        return new ResponseEntity<>(newKey, HttpStatus.CREATED);
     }
 
-    // --- Dashboard Endpoint ---
+    // --- Data Reporting & Export ---
 
-    @GetMapping("/dashboard/metrics")
-    public ResponseEntity<String> getDashboardMetrics() {
-        return ResponseEntity.ok(adminService.getDashboardMetrics());
-    }
-
-    // --- Reporting Endpoint ---
     @GetMapping("/reports/transactions")
     public ResponseEntity<String> exportTransactions() {
         String csvData = reportingService.generateAgentTransactionsCsv();
 
         HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.TEXT_PLAIN); // Using TEXT_PLAIN for simplicity, can be TEXT_CSV
+        headers.setContentType(MediaType.TEXT_PLAIN); // Can be MediaType.TEXT_CSV
         headers.setContentDispositionFormData("attachment", "transactions.csv");
 
         return new ResponseEntity<>(csvData, headers, HttpStatus.OK);

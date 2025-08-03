@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Null;
 import jakarta.validation.constraints.Size;
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -14,6 +15,7 @@ import lombok.NoArgsConstructor;
 @Data
 @Builder
 @NoArgsConstructor
+@AllArgsConstructor // <-- We are adding this back
 public class RegisterRequest {
 
     // --- Fields for ALL roles ---
@@ -43,20 +45,14 @@ public class RegisterRequest {
     @Null(groups = {ValidationGroups.Admin.class, ValidationGroups.Agent.class}, message = "KRA PIN should not be provided for this role")
     private String kraPin;
 
+    @NotBlank(groups = ValidationGroups.Superagent.class, message = "Paybill number is required for Superagents")
+    @Null(groups = {ValidationGroups.Admin.class, ValidationGroups.Agent.class}, message = "Paybill number should not be provided for this role")
+    private String paybillNumber;
+
     // --- Agent-specific fields ---
     @NotNull(groups = ValidationGroups.Agent.class, message = "Superagent ID is required for Agents")
     @Null(groups = {ValidationGroups.Admin.class, ValidationGroups.Superagent.class}, message = "Superagent ID should not be provided for this role")
     private Long superagentId;
 
-    // --- Constructor for testing ---
-    public RegisterRequest(String fullName, String email, String phone, String password, UserRole role, String iraNumber, String kraPin, Long superagentId) {
-        this.fullName = fullName;
-        this.email = email;
-        this.phone = phone;
-        this.password = password;
-        this.role = role;
-        this.iraNumber = iraNumber;
-        this.kraPin = kraPin;
-        this.superagentId = superagentId;
-    }
+    // We have removed the manual constructor. Lombok will now generate the correct one.
 }

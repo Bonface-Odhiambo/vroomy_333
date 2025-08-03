@@ -10,10 +10,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
-import static com.insuranceplatform.backend.enums.UserRole.ADMIN;
-import static com.insuranceplatform.backend.enums.UserRole.AGENT;
-import static com.insuranceplatform.backend.enums.UserRole.SUPERAGENT;
-
+import static com.insuranceplatform.backend.enums.UserRole.*; // Import all roles
 
 @Configuration
 @EnableWebSecurity
@@ -21,9 +18,9 @@ import static com.insuranceplatform.backend.enums.UserRole.SUPERAGENT;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthFilter;
+    private final ApiKeyAuthFilter apiKeyAuthFilter; // Inject the new filter
     private final AuthenticationProvider authenticationProvider;
 
-    // Define the public URLs
     private static final String[] PUBLIC_URLS = {
             "/api/v1/auth/**",
             "/swagger-ui.html",
@@ -35,23 +32,24 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                .csrf(csrf -> csrf.disable()) // Disable CSRF for stateless REST APIs
+                .csrf(csrf -> csrf.disable())
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authenticationProvider(authenticationProvider)
+                // Add our filters. The ApiKey filter runs before the JWT filter.
+                .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> auth
-                        // Allow public access to authentication, API documentation, and payment callbacks
                         .requestMatchers(PUBLIC_URLS).permitAll()
 
-                        // Role-based access control
+                        // --- NEW SECURITY RULE FOR THE DATA API ---
+                        .requestMatchers("/api/v1/data-sharing/**").hasRole("API_USER")
+
+                        // Role-based access control for platform users
                         .requestMatchers("/api/v1/admin/**").hasAuthority(ADMIN.name())
                         .requestMatchers("/api/v1/superagents/**").hasAnyAuthority(ADMIN.name(), SUPERAGENT.name())
                         .requestMatchers("/api/v1/agents/**").hasAnyAuthority(ADMIN.name(), SUPERAGENT.name(), AGENT.name())
-
-                        // All other requests must be authenticated
                         .anyRequest().authenticated()
-                )
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)) // No sessions, JWT is king
-                .authenticationProvider(authenticationProvider)
-                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class); // Add our JWT filter
-
+                );
         return http.build();
     }
 }

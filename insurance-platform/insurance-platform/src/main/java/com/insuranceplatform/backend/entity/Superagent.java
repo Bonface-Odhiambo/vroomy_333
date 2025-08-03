@@ -27,7 +27,9 @@ public class Superagent {
 
     @Column(nullable = false)
     private String kraPin;
+    
 
     @Builder.Default
     private boolean isVerified = false;
+    private String paybillNumber;
 }

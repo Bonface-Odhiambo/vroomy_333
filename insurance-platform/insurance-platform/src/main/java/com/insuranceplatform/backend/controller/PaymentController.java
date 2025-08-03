@@ -9,6 +9,10 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.GetMapping; 
+import org.springframework.web.bind.annotation.PathVariable;
+import com.insuranceplatform.backend.dto.PaybillDetailsDto;
+
 
 @RestController
 @RequestMapping("/api/v1/payments")
@@ -22,6 +26,11 @@ public class PaymentController {
     public ResponseEntity<String> stkPush(@RequestBody StkPushRequest request) {
         String response = mpesaService.initiateStkPush(request);
         return ResponseEntity.ok(response);
+    }
+     @GetMapping("/policy/{policyId}/paybill-details")
+    public ResponseEntity<PaybillDetailsDto> getPaybillDetails(@PathVariable Long policyId) {
+        PaybillDetailsDto details = mpesaService.getPaybillDetails(policyId);
+        return ResponseEntity.ok(details);
     }
 
     // This is the public callback URL Safaricom would call.

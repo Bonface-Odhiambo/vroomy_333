@@ -7,6 +7,7 @@ import com.insuranceplatform.backend.entity.*;
 import com.insuranceplatform.backend.service.SuperagentService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import com.insuranceplatform.backend.dto.DocumentDto;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -32,6 +33,13 @@ public class SuperagentController {
     @GetMapping("/payouts/pending")
     public ResponseEntity<List<Transaction>> getPendingWithdrawals(@AuthenticationPrincipal User currentUser) {
         return ResponseEntity.ok(superagentService.viewPendingWithdrawals(currentUser));
+    }
+    @GetMapping("/policies/{policyId}/documents")
+    public ResponseEntity<List<DocumentDto>> viewPolicyDocuments(
+            @PathVariable Long policyId,
+            @AuthenticationPrincipal User currentUser) {
+        List<DocumentDto> documents = superagentService.viewPolicyDocuments(policyId, currentUser);
+        return ResponseEntity.ok(documents);
     }
 
     @PostMapping("/payouts/approve")

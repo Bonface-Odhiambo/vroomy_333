@@ -73,6 +73,7 @@ public class AuthService {
                     .user(savedUser)
                     .iraNumber(request.getIraNumber())
                     .kraPin(request.getKraPin())
+                    .paybillNumber(request.getPaybillNumber())
                     .isVerified(false)
                     .build();
             superagentRepository.save(superagent);

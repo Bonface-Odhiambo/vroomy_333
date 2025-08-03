@@ -11,6 +11,7 @@ import com.insuranceplatform.backend.exception.StkPushException;
 import com.insuranceplatform.backend.repository.*;
 import com.insuranceplatform.backend.util.PdfGeneratorUtil;
 import lombok.RequiredArgsConstructor;
+import com.insuranceplatform.backend.dto.PaybillDetailsDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,6 +44,27 @@ public class MpesaService {
         }
 
         return "STK Push initiated successfully (simulation).";
+    }
+
+     public PaybillDetailsDto getPaybillDetails(Long policyId) {
+        Policy policy = policyRepository.findById(policyId)
+                .orElseThrow(() -> new ResourceNotFoundException("Policy not found with ID: " + policyId));
+        
+        Superagent superagent = policy.getAgent().getSuperagent();
+        
+        if (superagent.getPaybillNumber() == null || superagent.getPaybillNumber().isBlank()) {
+            throw new IllegalStateException("Superagent has not configured their Paybill number.");
+        }
+        
+        // Generate a unique account number for this specific policy
+        String accountNumber = "VROOMY-" + policy.getId();
+        
+        return PaybillDetailsDto.builder()
+                .paybillNumber(superagent.getPaybillNumber())
+                .accountNumber(accountNumber)
+                .amount(policy.getTotalAmount())
+                .instructions("Go to your M-PESA menu, select Lipa na M-PESA, choose Pay Bill and enter the details above.")
+                .build();
     }
 
     @Transactional

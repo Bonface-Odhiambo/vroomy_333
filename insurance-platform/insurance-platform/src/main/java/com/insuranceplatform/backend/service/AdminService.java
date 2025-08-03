@@ -1,18 +1,24 @@
 package com.insuranceplatform.backend.service;
 
 import com.insuranceplatform.backend.dto.CompanyRequest;
+import com.insuranceplatform.backend.dto.DashboardMetricsDto;
 import com.insuranceplatform.backend.dto.TaxRateRequest;
 import com.insuranceplatform.backend.dto.UserStatusRequest;
-import com.insuranceplatform.backend.entity.*; // Import all entities
-import com.insuranceplatform.backend.enums.UserRole; // Import UserRole
-import com.insuranceplatform.backend.enums.UserStatus; // Import UserStatus
+import com.insuranceplatform.backend.entity.*;
+import com.insuranceplatform.backend.enums.ClaimStatus;
+import com.insuranceplatform.backend.enums.PolicyStatus;
+import com.insuranceplatform.backend.enums.TransactionType;
+import com.insuranceplatform.backend.enums.UserRole;
+import com.insuranceplatform.backend.enums.UserStatus;
 import com.insuranceplatform.backend.exception.ResourceNotFoundException;
-import com.insuranceplatform.backend.repository.*; // Import all repositories
+import com.insuranceplatform.backend.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional; // Import Transactional
+import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -21,8 +27,12 @@ public class AdminService {
     private final InsuranceCompanyRepository companyRepository;
     private final GlobalConfigRepository configRepository;
     private final UserRepository userRepository;
-    private final SuperagentRepository superagentRepository; // Inject SuperagentRepository
-    private final AgentRepository agentRepository; // Inject AgentRepository
+    private final SuperagentRepository superagentRepository;
+    private final AgentRepository agentRepository;
+    private final ApiKeyRepository apiKeyRepository;
+    private final PolicyRepository policyRepository;
+    private final ClaimRepository claimRepository;
+    private final TransactionRepository transactionRepository;
 
     private static final Long GLOBAL_CONFIG_ID = 1L;
 
@@ -54,7 +64,7 @@ public class AdminService {
     // --- Global Config Management ---
     public GlobalConfig setTaxRate(TaxRateRequest request) {
         GlobalConfig config = configRepository.findById(GLOBAL_CONFIG_ID)
-                .orElse(new GlobalConfig()); // Create new if it doesn't exist
+                .orElse(new GlobalConfig());
 
         config.setId(GLOBAL_CONFIG_ID);
         config.setTaxRate(request.getTaxRate());
@@ -67,19 +77,15 @@ public class AdminService {
     }
 
     // --- User Management ---
-    @Transactional // Add Transactional to ensure all or no updates happen
+    @Transactional
     public User updateUserStatus(Long userId, UserStatusRequest request) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found with id: " + userId));
 
-        // Update the target user's status first
         user.setStatus(request.getStatus());
         User updatedUser = userRepository.save(user);
 
-        // --- THIS IS THE NEW CASCADE LOGIC ---
-        // If the user is a Superagent AND the new status is DEACTIVATED,
-        // then deactivate all of their agents as well.
-        if (user.getRole() == UserRole.SUPERAGENT && request.getStatus() == UserStatus.INACTIVE) { // Assuming DEACTIVATED is INACTIVE
+        if (user.getRole() == UserRole.SUPERAGENT && request.getStatus() == UserStatus.INACTIVE) {
             Superagent superagent = superagentRepository.findByUser(user)
                     .orElseThrow(() -> new IllegalStateException("Superagent profile not found for user: " + user.getFullName()));
             
@@ -91,15 +97,45 @@ public class AdminService {
                 userRepository.save(agentUser);
             }
         }
-        // --- END OF CASCADE LOGIC ---
-
         return updatedUser;
     }
 
-    // --- Dashboard/Metrics (Placeholder) ---
-    public String getDashboardMetrics() {
+    // --- Dashboard Metrics ---
+    public DashboardMetricsDto getDashboardMetrics() {
         long totalUsers = userRepository.count();
-        long totalCompanies = companyRepository.count();
-        return String.format("{\"totalUsers\": %d, \"totalCompanies\": %d}", totalUsers, totalCompanies);
+        long totalSuperagents = superagentRepository.count();
+        long totalAgents = agentRepository.count();
+        long totalPoliciesSold = policyRepository.count();
+        
+        BigDecimal totalPremium = policyRepository.sumPremiumByStatus(PolicyStatus.PAID);
+        BigDecimal commissionsPaid = transactionRepository.sumAmountByTransactionType(TransactionType.COMMISSION_EARNED);
+        
+        List<ClaimStatus> pendingStatuses = List.of(ClaimStatus.RAISED, ClaimStatus.IN_REVIEW);
+        long pendingClaims = claimRepository.countByStatusIn(pendingStatuses);
+
+        return DashboardMetricsDto.builder()
+                .totalUsers(totalUsers)
+                .totalSuperagents(totalSuperagents)
+                .totalAgents(totalAgents)
+                .totalPoliciesSold(totalPoliciesSold)
+                .totalPremiumCollected(totalPremium)
+                .totalCommissionsPaidOut(commissionsPaid)
+                .pendingClaims(pendingClaims)
+                .build();
+    }
+
+    // --- API Key Management ---
+    public ApiKey generateApiKey(Long companyId) {
+        InsuranceCompany company = companyRepository.findById(companyId)
+                .orElseThrow(() -> new ResourceNotFoundException("InsuranceCompany not found with id: " + companyId));
+        
+        String key = UUID.randomUUID().toString();
+        
+        ApiKey apiKey = ApiKey.builder()
+                .keyValue(key)
+                .insuranceCompany(company)
+                .build();
+        
+        return apiKeyRepository.save(apiKey);
     }
 }
