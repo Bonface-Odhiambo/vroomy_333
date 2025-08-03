@@ -9,11 +9,14 @@ import com.insuranceplatform.backend.entity.User;
 import com.insuranceplatform.backend.entity.Wallet;
 import com.insuranceplatform.backend.enums.UserRole;
 import com.insuranceplatform.backend.enums.UserStatus;
+import com.insuranceplatform.backend.exception.InvalidIraNumberException; // Import new exception
 import com.insuranceplatform.backend.exception.ResourceNotFoundException;
+import com.insuranceplatform.backend.exception.UserAlreadyExistsException;
 import com.insuranceplatform.backend.repository.AgentRepository;
 import com.insuranceplatform.backend.repository.SuperagentRepository;
 import com.insuranceplatform.backend.repository.UserRepository;
 import com.insuranceplatform.backend.repository.WalletRepository;
+import com.insuranceplatform.backend.util.IraApiValidator; // Import the validator
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -28,21 +31,29 @@ public class AuthService {
     private final UserRepository userRepository;
     private final SuperagentRepository superagentRepository;
     private final AgentRepository agentRepository;
-    private final WalletRepository walletRepository; // Added
+    private final WalletRepository walletRepository;
+    private final IraApiValidator iraApiValidator; // 1. INJECT THE VALIDATOR
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
 
-    @Transactional // Ensures all database operations succeed or fail together
+    @Transactional
     public AuthResponse register(RegisterRequest request) {
-        // TODO: Add validation here to check if email/phone already exists.
+        // Existing validation
+        if (userRepository.existsByEmail(request.getEmail())) {
+            throw new UserAlreadyExistsException("Error: Email is already in use!");
+        }
+        if (userRepository.existsByPhone(request.getPhone())) {
+            throw new UserAlreadyExistsException("Error: Phone number is already in use!");
+        }
+
         var user = User.builder()
                 .fullName(request.getFullName())
                 .email(request.getEmail())
                 .phone(request.getPhone())
                 .password(passwordEncoder.encode(request.getPassword()))
                 .role(request.getRole())
-                .status(UserStatus.ACTIVE) // Default to ACTIVE, can be changed
+                .status(UserStatus.ACTIVE)
                 .build();
         User savedUser = userRepository.save(user);
 
@@ -52,12 +63,17 @@ public class AuthService {
 
         // Role-specific logic
         if (request.getRole() == UserRole.SUPERAGENT) {
-            // TODO: Add IRA API validation logic here
+            // --- THIS VALIDATION BLOCK IS NEW ---
+            if (!iraApiValidator.isIraNumberValid(request.getIraNumber())) {
+                throw new InvalidIraNumberException("The provided IRA number is not valid or could not be verified.");
+            }
+            // --- END OF VALIDATION BLOCK ---
+
             Superagent superagent = Superagent.builder()
                     .user(savedUser)
                     .iraNumber(request.getIraNumber())
                     .kraPin(request.getKraPin())
-                    .isVerified(false) // Superagents must be verified by an admin later
+                    .isVerified(false)
                     .build();
             superagentRepository.save(superagent);
         } else if (request.getRole() == UserRole.AGENT) {
@@ -77,6 +93,7 @@ public class AuthService {
                 .build();
     }
 
+    // ... authenticate method remains the same ...
     public AuthResponse authenticate(AuthRequest request) {
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(

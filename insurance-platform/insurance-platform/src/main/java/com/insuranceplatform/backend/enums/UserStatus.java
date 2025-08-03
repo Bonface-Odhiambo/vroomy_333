@@ -1,1 +1,5 @@
-package com.insuranceplatform.backend.enums; public enum UserStatus { ACTIVE, INACTIVE, SUSPENDED }
+package com.insuranceplatform.backend.enums; 
+public enum UserStatus { 
+    ACTIVE, 
+    INACTIVE, 
+    SUSPENDED }

@@ -1,5 +1,7 @@
 package com.insuranceplatform.backend.entity;
 
+import com.insuranceplatform.backend.enums.TransactionStatus;
+import com.insuranceplatform.backend.enums.TransactionType;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -26,14 +28,21 @@ public class Transaction {
     private Wallet wallet;
 
     @ManyToOne
-    @JoinColumn(name = "policy_id") // Can be null for other transaction types like payouts
+    @JoinColumn(name = "policy_id")
     private Policy policy;
 
     @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal amount;
 
+    // --- UPDATED FIELDS ---
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private String transactionType; // e.g., "POLICY_PAYMENT", "COMMISSION_EARNED", "WITHDRAWAL"
+    private TransactionType transactionType;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private TransactionStatus status;
+    // --- END OF UPDATED FIELDS ---
 
     @Builder.Default
     private LocalDateTime timestamp = LocalDateTime.now();

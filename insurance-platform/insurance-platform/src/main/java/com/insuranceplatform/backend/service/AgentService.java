@@ -3,12 +3,18 @@ package com.insuranceplatform.backend.service;
 import com.insuranceplatform.backend.dto.CreatePolicyRequest;
 import com.insuranceplatform.backend.entity.*;
 import com.insuranceplatform.backend.enums.PolicyStatus;
+import com.insuranceplatform.backend.dto.RaiseClaimRequest; // New
+import com.insuranceplatform.backend.enums.ClaimStatus; // New
 import com.insuranceplatform.backend.exception.ResourceNotFoundException;
 import com.insuranceplatform.backend.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import java.time.LocalDateTime;
+import com.insuranceplatform.backend.dto.WithdrawalRequestDto;
+import com.insuranceplatform.backend.enums.TransactionStatus;
+import com.insuranceplatform.backend.enums.TransactionType;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -22,13 +28,23 @@ public class AgentService {
     private final ClientRepository clientRepository;
     private final PolicyRepository policyRepository;
     private final GlobalConfigRepository configRepository;
-    private final FileStorageService fileStorageService; // Injected for file handling
+    private final FileStorageService fileStorageService; 
+    private final ClaimRepository claimRepository;
+    private final NotificationService notificationService; 
+    private final WalletRepository walletRepository; 
+    private final TransactionRepository transactionRepository; 
 
     private Agent getAgentProfile(User currentUser) {
         // This is a helper method to avoid duplicating code.
         // It finds the Agent profile for the currently logged-in User.
         return agentRepository.findById(currentUser.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Agent profile not found for user ID: " + currentUser.getId()));
+    }
+
+    public List<Policy> viewRenewals(User currentUser, int daysUntilExpiry) {
+        Agent agent = getAgentProfile(currentUser);
+        LocalDateTime expiryCutoffDate = LocalDateTime.now().plusDays(daysUntilExpiry);
+        return policyRepository.findByAgentAndExpiryDateBefore(agent, expiryCutoffDate);
     }
 
     public List<Product> viewAvailableProducts(User currentUser) {
@@ -53,14 +69,28 @@ public class AgentService {
         }
 
         // --- Calculate Policy Cost ---
-        // TODO: This is a simplified calculation. Real-world logic could be much more complex.
-        GlobalConfig config = configRepository.findById(1L)
-                .orElseThrow(() -> new IllegalStateException("Global tax configuration is not set."));
+         GlobalConfig config = configRepository.findById(1L)
+            .orElseThrow(() -> new IllegalStateException("Global tax configuration is not set."));
 
-        BigDecimal rate = product.getRate(); // This could be a flat fee or a percentage.
-        BigDecimal premium = request.getInsuredValue().multiply(rate).divide(BigDecimal.valueOf(100)); // Assuming rate is a percentage
-        BigDecimal tax = premium.multiply(config.getTaxRate()).divide(BigDecimal.valueOf(100));
-        BigDecimal total = premium.add(tax);
+    BigDecimal premium;
+    switch (product.getCalculationType()) {
+        case PERCENTAGE_OF_VALUE:
+            if (request.getInsuredValue() == null || request.getInsuredValue().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalArgumentException("Insured value must be provided for percentage-based products.");
+            }
+            // Premium = (Insured Value * Rate) / 100
+            premium = request.getInsuredValue().multiply(product.getRate()).divide(BigDecimal.valueOf(100));
+            break;
+        case FLAT_RATE:
+            // Premium is simply the rate itself
+            premium = product.getRate();
+            break;
+        default:
+            throw new IllegalStateException("Unknown calculation type: " + product.getCalculationType());
+    }
+
+    BigDecimal tax = premium.multiply(config.getTaxRate()).divide(BigDecimal.valueOf(100));
+    BigDecimal total = premium.add(tax);
         // --- End Calculation ---
 
         // Create the client
@@ -87,6 +117,67 @@ public class AgentService {
     public List<Policy> viewMyPolicies(User currentUser) {
         Agent agent = getAgentProfile(currentUser);
         return policyRepository.findByAgent(agent);
+    }
+
+    @Transactional
+    public Transaction requestWithdrawal(WithdrawalRequestDto request, User currentUser) {
+        Agent agent = getAgentProfile(currentUser);
+        Wallet agentWallet = walletRepository.findByUser(agent.getUser())
+                .orElseThrow(() -> new IllegalStateException("Wallet not found for agent: " + currentUser.getFullName()));
+
+        BigDecimal amount = request.getAmount();
+
+        // Check if the agent has sufficient balance
+        if (agentWallet.getBalance().compareTo(amount) < 0) {
+            throw new IllegalArgumentException("Insufficient wallet balance for this withdrawal request.");
+        }
+
+        // Deduct the amount from the balance immediately to prevent double-spending
+        agentWallet.setBalance(agentWallet.getBalance().subtract(amount));
+        walletRepository.save(agentWallet);
+
+        // Create a pending withdrawal transaction
+        Transaction transaction = Transaction.builder()
+                .wallet(agentWallet)
+                .amount(amount)
+                .transactionType(TransactionType.WITHDRAWAL_REQUEST)
+                .status(TransactionStatus.PENDING)
+                .build();
+
+        return transactionRepository.save(transaction);
+    }
+
+    @Transactional
+    public Claim raiseClaim(RaiseClaimRequest request, User currentUser) {
+        Agent agent = getAgentProfile(currentUser);
+        Policy policy = policyRepository.findById(request.getPolicyId())
+                .orElseThrow(() -> new ResourceNotFoundException("Policy not found with ID: " + request.getPolicyId()));
+
+        // Security check: ensure agent owns the policy
+        if (!policy.getAgent().getId().equals(agent.getId())) {
+            throw new SecurityException("You are not authorized to raise a claim for this policy.");
+        }
+
+        // Create the initial claim object. The file URLs will be added separately.
+        Claim newClaim = Claim.builder()
+                .policy(policy)
+                .description(request.getDescription())
+                .status(ClaimStatus.RAISED) // Initial status
+                // Set placeholder URLs - these MUST be updated by file uploads
+                .policeAbstractUrl("PENDING_UPLOAD")
+                .drivingLicenseUrl("PENDING_UPLOAD")
+                .logbookUrl("PENDING_UPLOAD")
+                .build();
+        
+        Claim savedClaim = claimRepository.save(newClaim);
+
+        // Notify the superagent
+        Superagent superagent = agent.getSuperagent();
+        String message = String.format("Agent %s has raised a new claim (ID: %d) for policy %d.",
+                agent.getUser().getFullName(), savedClaim.getId(), policy.getId());
+        notificationService.createNotification(agent.getUser(), superagent.getUser(), message);
+
+        return savedClaim;
     }
 
     @Transactional

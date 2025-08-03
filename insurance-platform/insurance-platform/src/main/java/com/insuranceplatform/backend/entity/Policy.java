@@ -53,4 +53,6 @@ public class Policy {
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();
     private LocalDateTime paidAt;
+     private LocalDateTime startDate;
+    private LocalDateTime expiryDate;
 }

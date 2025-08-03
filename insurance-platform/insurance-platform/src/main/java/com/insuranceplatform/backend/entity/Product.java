@@ -8,6 +8,8 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 
+import com.insuranceplatform.backend.enums.CalculationType;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -33,4 +35,7 @@ public class Product {
 
     @Column(nullable = false, precision = 10, scale = 2) // For financial values
     private BigDecimal rate;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private CalculationType calculationType;
 }

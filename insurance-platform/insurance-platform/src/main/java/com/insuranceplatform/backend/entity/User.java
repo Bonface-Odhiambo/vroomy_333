@@ -19,7 +19,7 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "users") // Best practice to use plural table names
+@Table(name = "users")
 public class User implements UserDetails {
 
     @Id
@@ -46,6 +46,12 @@ public class User implements UserDetails {
     @Column(nullable = false)
     private UserStatus status;
 
+    // --- Relationship to Agent Profile (NEW) ---
+    // This establishes a bidirectional link from a User to their Agent profile, if it exists.
+    @OneToOne(mappedBy = "user", fetch = FetchType.LAZY)
+    private Agent agentProfile;
+    // --- END OF NEW CODE ---
+
     // --- Placeholders for Advanced Security ---
     @Builder.Default
     private boolean mfaEnabled = false;
@@ -62,7 +68,7 @@ public class User implements UserDetails {
     public String getUsername() {
         return email; // We will use email for login
     }
-    
+
     @Override
     public String getPassword() {
         return password;
