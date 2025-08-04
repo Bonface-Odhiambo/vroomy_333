@@ -12,6 +12,8 @@ import com.insuranceplatform.backend.enums.UserRole;
 import com.insuranceplatform.backend.enums.UserStatus;
 import com.insuranceplatform.backend.exception.ResourceNotFoundException;
 import com.insuranceplatform.backend.repository.*;
+import com.insuranceplatform.backend.dto.AddStockRequest;
+
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +35,7 @@ public class AdminService {
     private final PolicyRepository policyRepository;
     private final ClaimRepository claimRepository;
     private final TransactionRepository transactionRepository;
+    private final CertificateStockRepository certificateStockRepository;
 
     private static final Long GLOBAL_CONFIG_ID = 1L;
 
@@ -98,6 +101,27 @@ public class AdminService {
             }
         }
         return updatedUser;
+    }
+
+    @Transactional
+    public CertificateStock addCertificateStock(AddStockRequest request) {
+        Superagent superagent = superagentRepository.findById(request.getSuperagentId())
+                .orElseThrow(() -> new ResourceNotFoundException("Superagent not found with ID: " + request.getSuperagentId()));
+        
+        InsuranceCompany company = companyRepository.findById(request.getCompanyId())
+                .orElseThrow(() -> new ResourceNotFoundException("Insurance Company not found with ID: " + request.getCompanyId()));
+
+        // Check if stock for this combination already exists. If so, update it.
+        CertificateStock stock = certificateStockRepository
+                .findBySuperagentAndInsuranceCompanyAndProductClass(superagent, company, request.getProductClass())
+                .orElse(new CertificateStock()); // Or create a new one
+
+        stock.setSuperagent(superagent);
+        stock.setInsuranceCompany(company);
+        stock.setProductClass(request.getProductClass());
+        stock.setQuantity(stock.getQuantity() + request.getQuantity()); // Add to existing quantity
+
+        return certificateStockRepository.save(stock);
     }
 
     // --- Dashboard Metrics ---

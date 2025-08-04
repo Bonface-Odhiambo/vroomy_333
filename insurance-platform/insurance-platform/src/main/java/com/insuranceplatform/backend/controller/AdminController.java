@@ -7,6 +7,9 @@ import com.insuranceplatform.backend.dto.UserStatusRequest;
 import com.insuranceplatform.backend.entity.ApiKey;
 import com.insuranceplatform.backend.entity.GlobalConfig;
 import com.insuranceplatform.backend.entity.InsuranceCompany;
+import com.insuranceplatform.backend.dto.AddStockRequest;
+import com.insuranceplatform.backend.entity.CertificateStock;
+import jakarta.validation.Valid;
 import com.insuranceplatform.backend.entity.User;
 import com.insuranceplatform.backend.service.AdminService;
 import com.insuranceplatform.backend.service.ReportingService;
@@ -33,6 +36,11 @@ public class AdminController {
     public ResponseEntity<DashboardMetricsDto> getDashboardMetrics() {
         DashboardMetricsDto metrics = adminService.getDashboardMetrics();
         return ResponseEntity.ok(metrics);
+    }
+    @PostMapping("/certificate-stock")
+    public ResponseEntity<CertificateStock> addCertificateStock(@Valid @RequestBody AddStockRequest request) {
+        CertificateStock updatedStock = adminService.addCertificateStock(request);
+        return new ResponseEntity<>(updatedStock, HttpStatus.OK);
     }
 
     // --- Insurance Company Management ---

@@ -1,17 +1,17 @@
 package com.insuranceplatform.backend.service;
 
 import com.insuranceplatform.backend.dto.MpesaCallbackRequest;
+import com.insuranceplatform.backend.dto.PaybillDetailsDto;
 import com.insuranceplatform.backend.dto.StkPushRequest;
 import com.insuranceplatform.backend.entity.*;
 import com.insuranceplatform.backend.enums.PolicyStatus;
-import com.insuranceplatform.backend.enums.TransactionStatus; 
-import com.insuranceplatform.backend.enums.TransactionType;   
+import com.insuranceplatform.backend.enums.TransactionStatus;
+import com.insuranceplatform.backend.enums.TransactionType;
 import com.insuranceplatform.backend.exception.ResourceNotFoundException;
 import com.insuranceplatform.backend.exception.StkPushException;
 import com.insuranceplatform.backend.repository.*;
 import com.insuranceplatform.backend.util.PdfGeneratorUtil;
 import lombok.RequiredArgsConstructor;
-import com.insuranceplatform.backend.dto.PaybillDetailsDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +30,7 @@ public class MpesaService {
     private final CertificateRepository certificateRepository;
     private final NotificationService notificationService;
     private final PdfGeneratorUtil pdfGeneratorUtil;
+    private final CertificateStockRepository certificateStockRepository;
 
     public String initiateStkPush(StkPushRequest request) {
         Policy policy = policyRepository.findById(request.getPolicyId())
@@ -46,19 +47,18 @@ public class MpesaService {
         return "STK Push initiated successfully (simulation).";
     }
 
-     public PaybillDetailsDto getPaybillDetails(Long policyId) {
+    public PaybillDetailsDto getPaybillDetails(Long policyId) {
         Policy policy = policyRepository.findById(policyId)
                 .orElseThrow(() -> new ResourceNotFoundException("Policy not found with ID: " + policyId));
-        
+
         Superagent superagent = policy.getAgent().getSuperagent();
-        
+
         if (superagent.getPaybillNumber() == null || superagent.getPaybillNumber().isBlank()) {
             throw new IllegalStateException("Superagent has not configured their Paybill number.");
         }
-        
-        // Generate a unique account number for this specific policy
+
         String accountNumber = "VROOMY-" + policy.getId();
-        
+
         return PaybillDetailsDto.builder()
                 .paybillNumber(superagent.getPaybillNumber())
                 .accountNumber(accountNumber)
@@ -76,43 +76,55 @@ public class MpesaService {
 
         if (callback.getResultCode() != 0) {
             log.error("M-Pesa payment failed for policy {}: {}", callback.getPolicyId(), callback.getResultDesc());
-
             policy.setStatus(PolicyStatus.FAILED);
             policyRepository.save(policy);
-
             String messageForAgent = String.format("Payment failed for policy %d. Reason: %s",
                     policy.getId(), callback.getResultDesc());
             notificationService.createNotification(null, policy.getAgent().getUser(), messageForAgent);
-
             return;
         }
 
+        // --- 1. Deduct Certificate Stock ---
+        Product product = policy.getProduct();
+        Superagent superagent = policy.getAgent().getSuperagent();
+        CertificateStock stock = certificateStockRepository
+                .findBySuperagentAndInsuranceCompanyAndProductClass(superagent, product.getInsuranceCompany(), product.getName())
+                .orElseThrow(() -> new IllegalStateException(
+                        String.format("No certificate stock for product '%s' from company '%s'",
+                                product.getName(), product.getInsuranceCompany().getName())));
+        if (stock.getQuantity() < 1) {
+            throw new IllegalStateException("Insufficient certificate stock for this product.");
+        }
+        stock.setQuantity(stock.getQuantity() - 1);
+        certificateStockRepository.save(stock);
+        log.info("Deducted one certificate from stock. New balance for '{}': {}", product.getName(), stock.getQuantity());
+
+        // --- 2. Update Policy Status and Dates ---
         policy.setStatus(PolicyStatus.PAID);
         policy.setPaidAt(LocalDateTime.now());
         policy.setStartDate(policy.getPaidAt());
         policy.setExpiryDate(policy.getPaidAt().plusYears(1));
         policyRepository.save(policy);
 
+        // --- 3. Handle Commission ---
         Agent agent = policy.getAgent();
         BigDecimal commissionAmount = policy.getPremiumAmount().multiply(BigDecimal.valueOf(0.10));
-
         Wallet agentWallet = walletRepository.findByUser(agent.getUser())
                 .orElseThrow(() -> new IllegalStateException("Wallet not found for agent: " + agent.getUser().getFullName()));
-
         agentWallet.setBalance(agentWallet.getBalance().add(commissionAmount));
         walletRepository.save(agentWallet);
 
-        // --- THIS IS THE CORRECTED PART ---
+        // --- 4. Log Transaction ---
         Transaction commissionTransaction = Transaction.builder()
                 .wallet(agentWallet)
                 .policy(policy)
                 .amount(commissionAmount)
-                .transactionType(TransactionType.COMMISSION_EARNED) // Use the Enum constant
-                .status(TransactionStatus.COMPLETED) // Commission is always completed instantly
+                .transactionType(TransactionType.COMMISSION_EARNED)
+                .status(TransactionStatus.COMPLETED)
                 .build();
-        // --- END OF CORRECTION ---
         transactionRepository.save(commissionTransaction);
 
+        // --- 5. Generate Certificate ---
         String certificateUrl = pdfGeneratorUtil.generatePolicyCertificate(policy);
         Certificate certificate = Certificate.builder()
                 .policy(policy)
@@ -123,7 +135,7 @@ public class MpesaService {
         policy.setCertificateUrl(certificateUrl);
         policyRepository.save(policy);
 
-        Superagent superagent = agent.getSuperagent();
+        // --- 6. Send Notifications ---
         String messageForAgent = String.format("Payment of KES %.2f received for policy %d. Your commission of KES %.2f has been credited.",
                 policy.getTotalAmount(), policy.getId(), commissionAmount);
         notificationService.createNotification(null, agent.getUser(), messageForAgent);

@@ -42,6 +42,11 @@ public class SuperagentController {
         return ResponseEntity.ok(documents);
     }
 
+    @GetMapping("/certificate-stock")
+    public ResponseEntity<List<CertificateStock>> viewMyCertificateStock(@AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(superagentService.viewCertificateStock(currentUser));
+    }
+
     @PostMapping("/payouts/approve")
     public ResponseEntity<Transaction> approveWithdrawal(
             @RequestBody ApproveWithdrawalDto request,

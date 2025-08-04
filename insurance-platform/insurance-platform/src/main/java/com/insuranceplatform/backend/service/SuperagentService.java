@@ -31,6 +31,7 @@ public class SuperagentService {
     private final PolicyRepository policyRepository;
     private final WalletRepository walletRepository;
     private final TransactionRepository transactionRepository;
+    private final CertificateStockRepository certificateStockRepository; 
 
     // Helper method to get the Superagent profile for the logged-in user
     private Superagent getSuperagentProfile(User currentUser) {
@@ -56,6 +57,11 @@ public class SuperagentService {
         return productRepository.save(product);
     }
 
+    @Transactional(readOnly = true)
+    public List<CertificateStock> viewCertificateStock(User currentUser) {
+        Superagent superagent = getSuperagentProfile(currentUser);
+        return certificateStockRepository.findBySuperagent(superagent);
+    }
     // --- Agent Management ---
     @Transactional(readOnly = true)
     public List<Agent> viewMyAgents(User currentUser) {
