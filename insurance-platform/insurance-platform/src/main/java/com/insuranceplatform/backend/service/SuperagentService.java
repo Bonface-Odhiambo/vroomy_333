@@ -32,6 +32,7 @@ public class SuperagentService {
     private final WalletRepository walletRepository;
     private final TransactionRepository transactionRepository;
     private final CertificateStockRepository certificateStockRepository; 
+    private final LeadRepository leadRepository;
 
     // Helper method to get the Superagent profile for the logged-in user
     private Superagent getSuperagentProfile(User currentUser) {
@@ -139,6 +140,61 @@ public class SuperagentService {
             }
         }
         return documents;
+    }
+
+     @Transactional
+    public Lead createLead(LeadRequest request, User currentUser) {
+        Superagent superagent = getSuperagentProfile(currentUser);
+
+        Lead lead = Lead.builder()
+                .superagent(superagent)
+                .customerName(request.getCustomerName())
+                .customerPhone(request.getCustomerPhone())
+                .customerEmail(request.getCustomerEmail())
+                .notes(request.getNotes())
+                .status(request.getStatus())
+                .build();
+        
+        return leadRepository.save(lead);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Lead> viewLeads(User currentUser) {
+        Superagent superagent = getSuperagentProfile(currentUser);
+        return leadRepository.findBySuperagentOrderByCreatedAtDesc(superagent);
+    }
+
+    @Transactional
+    public Lead updateLead(Long leadId, LeadRequest request, User currentUser) {
+        Superagent superagent = getSuperagentProfile(currentUser);
+        Lead lead = leadRepository.findById(leadId)
+                .orElseThrow(() -> new ResourceNotFoundException("Lead not found with ID: " + leadId));
+
+        // Security Check: Ensure the superagent owns this lead
+        if (!lead.getSuperagent().getId().equals(superagent.getId())) {
+            throw new SecurityException("You are not authorized to update this lead.");
+        }
+
+        lead.setCustomerName(request.getCustomerName());
+        lead.setCustomerPhone(request.getCustomerPhone());
+        lead.setCustomerEmail(request.getCustomerEmail());
+        lead.setNotes(request.getNotes());
+        lead.setStatus(request.getStatus());
+        lead.setUpdatedAt(LocalDateTime.now());
+        
+        return leadRepository.save(lead);
+    }
+
+    public void deleteLead(Long leadId, User currentUser) {
+        Superagent superagent = getSuperagentProfile(currentUser);
+        Lead lead = leadRepository.findById(leadId)
+                .orElseThrow(() -> new ResourceNotFoundException("Lead not found with ID: " + leadId));
+
+        if (!lead.getSuperagent().getId().equals(superagent.getId())) {
+            throw new SecurityException("You are not authorized to delete this lead.");
+        }
+        
+        leadRepository.delete(lead);
     }
 
     // --- Claim Management ---

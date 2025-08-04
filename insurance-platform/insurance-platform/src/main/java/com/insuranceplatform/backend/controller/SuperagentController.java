@@ -12,6 +12,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import com.insuranceplatform.backend.dto.ApproveWithdrawalDto;
+import com.insuranceplatform.backend.dto.LeadRequest;
+
+import jakarta.validation.Valid;
 
 import java.util.List;
 
@@ -40,6 +43,36 @@ public class SuperagentController {
             @AuthenticationPrincipal User currentUser) {
         List<DocumentDto> documents = superagentService.viewPolicyDocuments(policyId, currentUser);
         return ResponseEntity.ok(documents);
+    }
+
+    @PostMapping("/leads")
+    public ResponseEntity<Lead> createLead(
+            @Valid @RequestBody LeadRequest request,
+            @AuthenticationPrincipal User currentUser) {
+        Lead newLead = superagentService.createLead(request, currentUser);
+        return new ResponseEntity<>(newLead, HttpStatus.CREATED);
+    }
+
+    @GetMapping("/leads")
+    public ResponseEntity<List<Lead>> viewLeads(@AuthenticationPrincipal User currentUser) {
+        return ResponseEntity.ok(superagentService.viewLeads(currentUser));
+    }
+
+    @PutMapping("/leads/{leadId}")
+    public ResponseEntity<Lead> updateLead(
+            @PathVariable Long leadId,
+            @Valid @RequestBody LeadRequest request,
+            @AuthenticationPrincipal User currentUser) {
+        Lead updatedLead = superagentService.updateLead(leadId, request, currentUser);
+        return ResponseEntity.ok(updatedLead);
+    }
+
+    @DeleteMapping("/leads/{leadId}")
+    public ResponseEntity<Void> deleteLead(
+            @PathVariable Long leadId,
+            @AuthenticationPrincipal User currentUser) {
+        superagentService.deleteLead(leadId, currentUser);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/certificate-stock")
