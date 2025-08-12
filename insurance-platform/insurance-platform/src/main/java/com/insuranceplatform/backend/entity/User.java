@@ -7,10 +7,13 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.CreationTimestamp; // Import for automatic timestamping
+import org.hibernate.annotations.UpdateTimestamp;   // Import for automatic timestamping
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 
@@ -46,18 +49,31 @@ public class User implements UserDetails {
     @Column(nullable = false)
     private UserStatus status;
 
-    // --- Relationship to Agent Profile (NEW) ---
-    // This establishes a bidirectional link from a User to their Agent profile, if it exists.
+    // --- NEW FIELDS FOR PASSWORD RESET ---
+    private String passwordResetToken;
+    private LocalDateTime passwordResetTokenExpiry;
+    // --- END OF NEW FIELDS ---
+
+    // --- NEW: Timestamps for Auditing ---
+    @CreationTimestamp
+    @Column(updatable = false, nullable = false)
+    private LocalDateTime createdAt;
+
+    @UpdateTimestamp
+    @Column(nullable = false)
+    private LocalDateTime updatedAt;
+    // --- END OF NEW TIMESTAMPS ---
+
+    // --- Relationship to Agent Profile ---
     @OneToOne(mappedBy = "user", fetch = FetchType.LAZY)
     private Agent agentProfile;
-    // --- END OF NEW CODE ---
 
     // --- Placeholders for Advanced Security ---
     @Builder.Default
     private boolean mfaEnabled = false;
     private String mfaSecret; // For TOTP (Google Authenticator)
 
-    // --- UserDetails Methods ---
+    // --- UserDetails Methods (Unchanged) ---
 
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {

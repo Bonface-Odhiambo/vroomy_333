@@ -1,11 +1,11 @@
 package com.insuranceplatform.backend.config;
 
-import com.insuranceplatform.backend.entity.ApiKey;
 import com.insuranceplatform.backend.repository.ApiKeyRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.NonNull; // Import Lombok's @NonNull annotation
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.AuthorityUtils;
@@ -23,8 +23,16 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     private final ApiKeyRepository apiKeyRepository;
     public static final String API_KEY_HEADER = "X-API-KEY";
 
+    /**
+     * This filter intercepts requests to check for a valid API key in the header.
+     * If a valid key is found, it authenticates the request with a specific "API_USER" role.
+     * The @NonNull annotations are added to satisfy the contract of the parent class.
+     */
     @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+    protected void doFilterInternal(
+            @NonNull HttpServletRequest request,
+            @NonNull HttpServletResponse response,
+            @NonNull FilterChain filterChain)
             throws ServletException, IOException {
 
         String apiKeyHeaderValue = request.getHeader(API_KEY_HEADER);
@@ -32,20 +40,22 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         if (apiKeyHeaderValue != null) {
             apiKeyRepository.findByKeyValue(apiKeyHeaderValue).ifPresent(apiKey -> {
                 if (apiKey.isEnabled()) {
-                    // Key is valid, grant authentication with a specific role
+                    // Key is valid, create an authentication token
                     var auth = new UsernamePasswordAuthenticationToken(
-                            apiKey.getInsuranceCompany().getName(), // The principal is the company name
-                            null,
-                            AuthorityUtils.createAuthorityList("ROLE_API_USER") // A special role for API access
+                            apiKey.getInsuranceCompany().getName(), // Principal is the company name
+                            null, // No credentials needed for API key auth
+                            AuthorityUtils.createAuthorityList("ROLE_API_USER") // Grant a specific role
                     );
                     SecurityContextHolder.getContext().setAuthentication(auth);
 
-                    // Update last used timestamp
+                    // Update the last used timestamp for auditing purposes
                     apiKey.setLastUsed(LocalDateTime.now());
                     apiKeyRepository.save(apiKey);
                 }
             });
         }
+        
+        // Continue the filter chain for other authentication mechanisms (like JWT) to run.
         filterChain.doFilter(request, response);
     }
 }

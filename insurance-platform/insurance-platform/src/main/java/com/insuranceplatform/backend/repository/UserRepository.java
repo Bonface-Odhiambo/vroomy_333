@@ -34,4 +34,5 @@ public interface UserRepository extends JpaRepository<User, Long> {
      */
     // CORRECTED: The method parameter is now UserRole
     List<User> findByRole(UserRole role);
+    Optional<User> findByPasswordResetToken(String token);
 }
