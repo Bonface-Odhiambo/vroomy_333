@@ -4,16 +4,11 @@ import com.insuranceplatform.backend.dto.CompanyRequest;
 import com.insuranceplatform.backend.dto.DashboardMetricsDto;
 import com.insuranceplatform.backend.dto.TaxRateRequest;
 import com.insuranceplatform.backend.dto.UserStatusRequest;
+import com.insuranceplatform.backend.dto.AddStockRequest;
 import com.insuranceplatform.backend.entity.*;
-import com.insuranceplatform.backend.enums.ClaimStatus;
-import com.insuranceplatform.backend.enums.PolicyStatus;
-import com.insuranceplatform.backend.enums.TransactionType;
-import com.insuranceplatform.backend.enums.UserRole;
-import com.insuranceplatform.backend.enums.UserStatus;
+import com.insuranceplatform.backend.enums.*; // Assuming all enums are here
 import com.insuranceplatform.backend.exception.ResourceNotFoundException;
 import com.insuranceplatform.backend.repository.*;
-import com.insuranceplatform.backend.dto.AddStockRequest;
-
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,12 +35,27 @@ public class AdminService {
     private static final Long GLOBAL_CONFIG_ID = 1L;
 
     // --- Insurance Company Management ---
+
     public InsuranceCompany createCompany(CompanyRequest request) {
         InsuranceCompany company = InsuranceCompany.builder()
                 .name(request.getName())
                 .iraNumber(request.getIraNumber())
                 .build();
         return companyRepository.save(company);
+    }
+
+    /**
+     * NEW METHOD: Updates an existing insurance company's details.
+     */
+    @Transactional
+    public InsuranceCompany updateCompany(Long id, CompanyRequest request) {
+        InsuranceCompany companyToUpdate = companyRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("InsuranceCompany not found with id: " + id));
+
+        companyToUpdate.setName(request.getName());
+        companyToUpdate.setIraNumber(request.getIraNumber());
+
+        return companyRepository.save(companyToUpdate);
     }
 
     public List<InsuranceCompany> getAllCompanies() {
@@ -65,6 +75,7 @@ public class AdminService {
     }
 
     // --- Global Config Management ---
+
     public GlobalConfig setTaxRate(TaxRateRequest request) {
         GlobalConfig config = configRepository.findById(GLOBAL_CONFIG_ID)
                 .orElse(new GlobalConfig());
@@ -73,6 +84,23 @@ public class AdminService {
         config.setTaxRate(request.getTaxRate());
         return configRepository.save(config);
     }
+    
+    /**
+     * NEW METHOD: Updates the global configuration settings from a full GlobalConfig object.
+     * This is more flexible than updating a single field at a time.
+     */
+    @Transactional
+    public GlobalConfig updateConfig(GlobalConfig configRequest) {
+        GlobalConfig configToUpdate = configRepository.findById(GLOBAL_CONFIG_ID)
+                .orElseThrow(() -> new ResourceNotFoundException("GlobalConfig not found. Please set it first using POST /config/tax or ensure ID=1 exists."));
+
+        // Update all relevant fields from the request
+        configToUpdate.setTaxRate(configRequest.getTaxRate());
+        // Add other settings here in the future, e.g.:
+        // configToUpdate.setSomeOtherSetting(configRequest.getSomeOtherSetting());
+
+        return configRepository.save(configToUpdate);
+    }
 
     public GlobalConfig getGlobalConfig() {
         return configRepository.findById(GLOBAL_CONFIG_ID)
@@ -80,6 +108,25 @@ public class AdminService {
     }
 
     // --- User Management ---
+    
+    /**
+     * NEW METHOD: Approves a superagent, changing their status to ACTIVE.
+     * This is a critical part of the onboarding workflow.
+     */
+    @Transactional
+    public void approveSuperagent(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found with id: " + userId));
+
+        if (user.getRole() != UserRole.SUPERAGENT) {
+            throw new IllegalStateException("User with id " + userId + " is not a Superagent.");
+        }
+        
+        // Change status from PENDING_APPROVAL (or similar) to ACTIVE
+        user.setStatus(UserStatus.ACTIVE);
+        userRepository.save(user);
+    }
+
     @Transactional
     public User updateUserStatus(Long userId, UserStatusRequest request) {
         User user = userRepository.findById(userId)
@@ -88,6 +135,7 @@ public class AdminService {
         user.setStatus(request.getStatus());
         User updatedUser = userRepository.save(user);
 
+        // This logic correctly deactivates agents when their superagent is deactivated.
         if (user.getRole() == UserRole.SUPERAGENT && request.getStatus() == UserStatus.INACTIVE) {
             Superagent superagent = superagentRepository.findByUser(user)
                     .orElseThrow(() -> new IllegalStateException("Superagent profile not found for user: " + user.getFullName()));
@@ -111,20 +159,20 @@ public class AdminService {
         InsuranceCompany company = companyRepository.findById(request.getCompanyId())
                 .orElseThrow(() -> new ResourceNotFoundException("Insurance Company not found with ID: " + request.getCompanyId()));
 
-        // Check if stock for this combination already exists. If so, update it.
         CertificateStock stock = certificateStockRepository
                 .findBySuperagentAndInsuranceCompanyAndProductClass(superagent, company, request.getProductClass())
-                .orElse(new CertificateStock()); // Or create a new one
+                .orElse(new CertificateStock());
 
         stock.setSuperagent(superagent);
         stock.setInsuranceCompany(company);
         stock.setProductClass(request.getProductClass());
-        stock.setQuantity(stock.getQuantity() + request.getQuantity()); // Add to existing quantity
+        stock.setQuantity(stock.getQuantity() + request.getQuantity());
 
         return certificateStockRepository.save(stock);
     }
 
     // --- Dashboard Metrics ---
+    
     public DashboardMetricsDto getDashboardMetrics() {
         long totalUsers = userRepository.count();
         long totalSuperagents = superagentRepository.count();
@@ -142,13 +190,14 @@ public class AdminService {
                 .totalSuperagents(totalSuperagents)
                 .totalAgents(totalAgents)
                 .totalPoliciesSold(totalPoliciesSold)
-                .totalPremiumCollected(totalPremium)
-                .totalCommissionsPaidOut(commissionsPaid)
+                .totalPremiumCollected(totalPremium != null ? totalPremium : BigDecimal.ZERO) // Handle null case
+                .totalCommissionsPaidOut(commissionsPaid != null ? commissionsPaid : BigDecimal.ZERO) // Handle null case
                 .pendingClaims(pendingClaims)
                 .build();
     }
 
     // --- API Key Management ---
+    
     public ApiKey generateApiKey(Long companyId) {
         InsuranceCompany company = companyRepository.findById(companyId)
                 .orElseThrow(() -> new ResourceNotFoundException("InsuranceCompany not found with id: " + companyId));

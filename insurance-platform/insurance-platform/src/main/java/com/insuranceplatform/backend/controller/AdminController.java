@@ -1,19 +1,13 @@
 package com.insuranceplatform.backend.controller;
 
-import com.insuranceplatform.backend.dto.CompanyRequest;
-import com.insuranceplatform.backend.dto.DashboardMetricsDto;
-import com.insuranceplatform.backend.dto.TaxRateRequest;
-import com.insuranceplatform.backend.dto.UserStatusRequest;
-import com.insuranceplatform.backend.entity.ApiKey;
-import com.insuranceplatform.backend.entity.GlobalConfig;
-import com.insuranceplatform.backend.entity.InsuranceCompany;
-import com.insuranceplatform.backend.dto.AddStockRequest;
-import com.insuranceplatform.backend.entity.CertificateStock;
-import jakarta.validation.Valid;
-import com.insuranceplatform.backend.entity.User;
+import com.insuranceplatform.backend.dto.*; // Assuming new DTOs are in this package
+import com.insuranceplatform.backend.entity.*;
 import com.insuranceplatform.backend.service.AdminService;
 import com.insuranceplatform.backend.service.ReportingService;
+import com.insuranceplatform.backend.service.UserService; // Import the new service
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.Resource; // Import for file streaming
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -29,6 +23,8 @@ public class AdminController {
 
     private final AdminService adminService;
     private final ReportingService reportingService;
+    // ADDED: UserService to handle general user retrieval logic
+    private final UserService userService;
 
     // --- Dashboard & Metrics ---
 
@@ -37,16 +33,17 @@ public class AdminController {
         DashboardMetricsDto metrics = adminService.getDashboardMetrics();
         return ResponseEntity.ok(metrics);
     }
+    
     @PostMapping("/certificate-stock")
     public ResponseEntity<CertificateStock> addCertificateStock(@Valid @RequestBody AddStockRequest request) {
         CertificateStock updatedStock = adminService.addCertificateStock(request);
         return new ResponseEntity<>(updatedStock, HttpStatus.OK);
     }
 
-    // --- Insurance Company Management ---
+    // --- Insurance Company Management (CRUD) ---
 
     @PostMapping("/companies")
-    public ResponseEntity<InsuranceCompany> createCompany(@RequestBody CompanyRequest request) {
+    public ResponseEntity<InsuranceCompany> createCompany(@Valid @RequestBody CompanyRequest request) {
         return new ResponseEntity<>(adminService.createCompany(request), HttpStatus.CREATED);
     }
 
@@ -59,6 +56,15 @@ public class AdminController {
     public ResponseEntity<InsuranceCompany> getCompanyById(@PathVariable Long id) {
         return ResponseEntity.ok(adminService.getCompanyById(id));
     }
+    
+    /**
+     * NEW ENDPOINT: Update an existing insurance company's details.
+     */
+    @PutMapping("/companies/{id}")
+    public ResponseEntity<InsuranceCompany> updateCompany(@PathVariable Long id, @Valid @RequestBody CompanyRequest request) {
+        InsuranceCompany updatedCompany = adminService.updateCompany(id, request);
+        return ResponseEntity.ok(updatedCompany);
+    }
 
     @DeleteMapping("/companies/{id}")
     public ResponseEntity<Void> deleteCompany(@PathVariable Long id) {
@@ -68,16 +74,55 @@ public class AdminController {
 
     // --- User Management ---
 
+    /**
+     * NEW ENDPOINT: Get a list of all users (Agents and Superagents).
+     * Supports filtering by role (e.g., /users?role=AGENT).
+     */
+    @GetMapping("/users")
+    public ResponseEntity<List<UserDto>> getAllUsers(@RequestParam(required = false) String role) {
+        List<UserDto> users = userService.findAllUsers(role);
+        return ResponseEntity.ok(users);
+    }
+
+    /**
+     * NEW ENDPOINT: Get detailed information for a single user by their ID.
+     * Responds with a DTO to avoid exposing sensitive data.
+     */
+    @GetMapping("/users/{userId}")
+    public ResponseEntity<UserDto> getUserById(@PathVariable Long userId) {
+        UserDto user = userService.findUserDtoById(userId);
+        return ResponseEntity.ok(user);
+    }
+
     @PatchMapping("/users/{userId}/status")
     public ResponseEntity<User> updateUserStatus(@PathVariable Long userId, @RequestBody UserStatusRequest request) {
         return ResponseEntity.ok(adminService.updateUserStatus(userId, request));
     }
 
-    // --- Global Configuration ---
+    /**
+     * NEW ENDPOINT: Approve a newly registered Superagent, making their account active.
+     * This is a critical step in the onboarding workflow.
+     */
+    @PatchMapping("/superagents/{superagentId}/approve")
+    public ResponseEntity<Void> approveSuperagent(@PathVariable Long superagentId) {
+        adminService.approveSuperagent(superagentId);
+        return ResponseEntity.ok().build();
+    }
 
+    // --- Global Configuration ---
+    
     @PostMapping("/config/tax")
     public ResponseEntity<GlobalConfig> setTaxRate(@RequestBody TaxRateRequest request) {
         return ResponseEntity.ok(adminService.setTaxRate(request));
+    }
+    
+    /**
+     * NEW ENDPOINT: A more generic way to update any global setting.
+     */
+    @PutMapping("/config")
+    public ResponseEntity<GlobalConfig> updateGlobalConfig(@Valid @RequestBody GlobalConfig config) {
+        GlobalConfig updatedConfig = adminService.updateConfig(config);
+        return ResponseEntity.ok(updatedConfig);
     }
 
     @GetMapping("/config")
@@ -94,15 +139,18 @@ public class AdminController {
     }
 
     // --- Data Reporting & Export ---
+    
+    /**
+     * UPGRADED ENDPOINT: Exports all agent transactions as a downloadable CSV file.
+     * This now uses a Resource for efficient streaming, preventing memory issues with large reports.
+     */
+    @GetMapping(value = "/reports/transactions.csv", produces = "text/csv")
+    public ResponseEntity<Resource> exportTransactionsAsCsv() {
+        Resource resource = reportingService.generateTransactionsCsvAsResource();
 
-    @GetMapping("/reports/transactions")
-    public ResponseEntity<String> exportTransactions() {
-        String csvData = reportingService.generateAgentTransactionsCsv();
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.TEXT_PLAIN); // Can be MediaType.TEXT_CSV
-        headers.setContentDispositionFormData("attachment", "transactions.csv");
-
-        return new ResponseEntity<>(csvData, headers, HttpStatus.OK);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"transactions-report.csv\"")
+                .contentType(MediaType.parseMediaType("text/csv"))
+                .body(resource);
     }
 }

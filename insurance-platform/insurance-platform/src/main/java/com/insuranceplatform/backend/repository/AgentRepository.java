@@ -12,4 +12,5 @@ import java.util.Optional;
 public interface AgentRepository extends JpaRepository<Agent, Long> {
     List<Agent> findBySuperagent(Superagent superagent);
     Optional<Agent> findByUser(User user);
+    long countBySuperagent(Superagent superagent);
 }

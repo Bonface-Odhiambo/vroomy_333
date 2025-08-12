@@ -1,195 +1,169 @@
 package com.insuranceplatform.backend.service;
 
-import com.insuranceplatform.backend.dto.CreatePolicyRequest;
+import com.insuranceplatform.backend.dto.*;
 import com.insuranceplatform.backend.entity.*;
-import com.insuranceplatform.backend.enums.PolicyStatus;
-import com.insuranceplatform.backend.dto.RaiseClaimRequest; // New
-import com.insuranceplatform.backend.enums.ClaimStatus; // New
+import com.insuranceplatform.backend.enums.*;
 import com.insuranceplatform.backend.exception.ResourceNotFoundException;
 import com.insuranceplatform.backend.repository.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-import java.time.LocalDateTime;
-import com.insuranceplatform.backend.dto.WithdrawalRequestDto;
-import com.insuranceplatform.backend.enums.TransactionStatus;
-import com.insuranceplatform.backend.enums.TransactionType;
 
 import java.math.BigDecimal;
+import java.net.MalformedURLException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
 @RequiredArgsConstructor
 public class AgentService {
 
+    // --- All required dependencies injected via constructor ---
     private final AgentRepository agentRepository;
     private final ProductRepository productRepository;
     private final ClientRepository clientRepository;
     private final PolicyRepository policyRepository;
     private final GlobalConfigRepository configRepository;
-    private final FileStorageService fileStorageService; 
+    private final FileStorageService fileStorageService;
     private final ClaimRepository claimRepository;
-    private final NotificationService notificationService; 
-    private final WalletRepository walletRepository; 
-    private final TransactionRepository transactionRepository; 
+    private final NotificationService notificationService;
+    private final WalletRepository walletRepository;
+    private final TransactionRepository transactionRepository;
+    private final UserRepository userRepository; // Added
+    private final AuthService authService;       // Added
 
-    private Agent getAgentProfile(User currentUser) {
-        // This is a helper method to avoid duplicating code.
-        // It finds the Agent profile for the currently logged-in User.
-        return agentRepository.findById(currentUser.getId())
-                .orElseThrow(() -> new ResourceNotFoundException("Agent profile not found for user ID: " + currentUser.getId()));
-    }
+    // --- Profile Management ---
 
-    public List<Policy> viewRenewals(User currentUser, int daysUntilExpiry) {
-        Agent agent = getAgentProfile(currentUser);
-        LocalDateTime expiryCutoffDate = LocalDateTime.now().plusDays(daysUntilExpiry);
-        return policyRepository.findByAgentAndExpiryDateBefore(agent, expiryCutoffDate);
-    }
-
-    public List<Product> viewAvailableProducts(User currentUser) {
-        Agent agent = getAgentProfile(currentUser);
-        Superagent superagent = agent.getSuperagent();
-        // This logic is slightly simplified. A more robust solution might query products directly.
-        // For now, this demonstrates the relationship traversal.
-        return productRepository.findAll().stream()
-                .filter(p -> p.getSuperagent().getId().equals(superagent.getId()))
-                .toList();
+    @Transactional(readOnly = true)
+    public Agent getCurrentAgentProfile() {
+        User currentUser = authService.getCurrentUser();
+        return agentRepository.findByUser(currentUser)
+                .orElseThrow(() -> new ResourceNotFoundException("Agent profile not found for current user."));
     }
 
     @Transactional
-    public Policy createPolicy(CreatePolicyRequest request, User currentUser) {
-        Agent agent = getAgentProfile(currentUser);
+    public Agent updateCurrentAgentProfile(UpdateProfileRequest request) {
+        User currentUser = authService.getCurrentUser();
+        Agent agent = getCurrentAgentProfile();
+
+        currentUser.setFullName(request.fullName());
+        currentUser.setEmail(request.email());
+        userRepository.save(currentUser);
+
+        return agentRepository.save(agent);
+    }
+
+    // --- Wallet & Transaction Management ---
+    
+    @Transactional(readOnly = true)
+    public WalletDto getWalletDetailsForCurrentAgent() {
+        User currentUser = authService.getCurrentUser();
+        Wallet wallet = walletRepository.findByUser(currentUser)
+                .orElseThrow(() -> new ResourceNotFoundException("Wallet not found for current user."));
+        List<Transaction> transactions = transactionRepository.findByWalletOrderByTimestampDesc(wallet);
+        return new WalletDto(wallet.getBalance(), transactions);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Transaction> getTransactionsForCurrentAgent() {
+        User currentUser = authService.getCurrentUser();
+        Wallet wallet = walletRepository.findByUser(currentUser)
+                .orElseThrow(() -> new ResourceNotFoundException("Wallet not found for current user."));
+        return transactionRepository.findByWalletOrderByTimestampDesc(wallet);
+    }
+
+    @Transactional
+    public Transaction requestWithdrawal(WithdrawalRequestDto request) {
+        Agent agent = getCurrentAgentProfile();
+        Wallet agentWallet = walletRepository.findByUser(agent.getUser())
+                .orElseThrow(() -> new IllegalStateException("Wallet not found for agent: " + agent.getUser().getFullName()));
+
+        if (agentWallet.getBalance().compareTo(request.getAmount()) < 0) {
+            throw new IllegalArgumentException("Insufficient wallet balance for this withdrawal request.");
+        }
+
+        agentWallet.setBalance(agentWallet.getBalance().subtract(request.getAmount()));
+        walletRepository.save(agentWallet);
+
+        Transaction transaction = Transaction.builder()
+                .wallet(agentWallet)
+                .amount(request.getAmount())
+                .transactionType(TransactionType.WITHDRAWAL_REQUEST)
+                .status(TransactionStatus.PENDING)
+                .build();
+        return transactionRepository.save(transaction);
+    }
+    
+    // --- Product & Policy Management ---
+
+    @Transactional(readOnly = true)
+    public List<Product> viewAvailableProducts() {
+        Agent agent = getCurrentAgentProfile();
+        // OPTIMIZED: Use a direct repository query for better performance.
+        return productRepository.findBySuperagent(agent.getSuperagent());
+    }
+
+    @Transactional(readOnly = true)
+    public List<Policy> viewMyPolicies() {
+        Agent agent = getCurrentAgentProfile();
+        return policyRepository.findByAgent(agent);
+    }
+    
+    @Transactional(readOnly = true)
+    public Policy getPolicyDetailsForCurrentAgent(Long policyId) {
+        Agent agent = getCurrentAgentProfile();
+        Policy policy = policyRepository.findById(policyId)
+                .orElseThrow(() -> new ResourceNotFoundException("Policy not found with ID: " + policyId));
+        if (!policy.getAgent().getId().equals(agent.getId())) {
+            throw new SecurityException("You are not authorized to view this policy.");
+        }
+        return policy;
+    }
+
+    @Transactional
+    public Policy createPolicy(CreatePolicyRequest request) {
+        Agent agent = getCurrentAgentProfile();
         Product product = productRepository.findById(request.getProductId())
                 .orElseThrow(() -> new ResourceNotFoundException("Product not found with ID: " + request.getProductId()));
 
-        // Security Check: Ensure the agent is selling a product owned by their superagent.
         if (!product.getSuperagent().getId().equals(agent.getSuperagent().getId())) {
             throw new SecurityException("Agent is not authorized to sell this product.");
         }
 
-        // --- Calculate Policy Cost ---
-         GlobalConfig config = configRepository.findById(1L)
-            .orElseThrow(() -> new IllegalStateException("Global tax configuration is not set."));
+        GlobalConfig config = configRepository.findById(1L)
+                .orElseThrow(() -> new IllegalStateException("Global tax configuration is not set."));
 
-    BigDecimal premium;
-    switch (product.getCalculationType()) {
-        case PERCENTAGE_OF_VALUE:
-            if (request.getInsuredValue() == null || request.getInsuredValue().compareTo(BigDecimal.ZERO) <= 0) {
-                throw new IllegalArgumentException("Insured value must be provided for percentage-based products.");
-            }
-            // Premium = (Insured Value * Rate) / 100
-            premium = request.getInsuredValue().multiply(product.getRate()).divide(BigDecimal.valueOf(100));
-            break;
-        case FLAT_RATE:
-            // Premium is simply the rate itself
-            premium = product.getRate();
-            break;
-        default:
-            throw new IllegalStateException("Unknown calculation type: " + product.getCalculationType());
-    }
+        BigDecimal premium = calculatePremium(product, request.getInsuredValue());
+        BigDecimal tax = premium.multiply(config.getTaxRate()).divide(BigDecimal.valueOf(100));
+        BigDecimal total = premium.add(tax);
 
-    BigDecimal tax = premium.multiply(config.getTaxRate()).divide(BigDecimal.valueOf(100));
-    BigDecimal total = premium.add(tax);
-        // --- End Calculation ---
-
-        // Create the client
-        Client client = Client.builder()
-                .agent(agent)
-                .fullName(request.getClientFullName())
-                .build();
-        Client savedClient = clientRepository.save(client);
-
-        // Create the policy
+        Client client = clientRepository.save(Client.builder().agent(agent).fullName(request.getClientFullName()).build());
         Policy policy = Policy.builder()
-                .agent(agent)
-                .client(savedClient)
-                .product(product)
-                .premiumAmount(premium)
-                .taxAmount(tax)
-                .totalAmount(total)
-                .status(PolicyStatus.PENDING_PAYMENT)
-                .build();
-
+                .agent(agent).client(client).product(product)
+                .premiumAmount(premium).taxAmount(tax).totalAmount(total)
+                .status(PolicyStatus.PENDING_PAYMENT).build();
         return policyRepository.save(policy);
     }
 
-    public List<Policy> viewMyPolicies(User currentUser) {
-        Agent agent = getAgentProfile(currentUser);
-        return policyRepository.findByAgent(agent);
+    @Transactional(readOnly = true)
+    public List<Policy> viewRenewals(int daysUntilExpiry) {
+        Agent agent = getCurrentAgentProfile();
+        LocalDateTime expiryCutoffDate = LocalDateTime.now().plusDays(daysUntilExpiry);
+        return policyRepository.findByAgentAndExpiryDateBefore(agent, expiryCutoffDate);
     }
+    
+    // --- Document & Certificate Management ---
 
     @Transactional
-    public Transaction requestWithdrawal(WithdrawalRequestDto request, User currentUser) {
-        Agent agent = getAgentProfile(currentUser);
-        Wallet agentWallet = walletRepository.findByUser(agent.getUser())
-                .orElseThrow(() -> new IllegalStateException("Wallet not found for agent: " + currentUser.getFullName()));
-
-        BigDecimal amount = request.getAmount();
-
-        // Check if the agent has sufficient balance
-        if (agentWallet.getBalance().compareTo(amount) < 0) {
-            throw new IllegalArgumentException("Insufficient wallet balance for this withdrawal request.");
-        }
-
-        // Deduct the amount from the balance immediately to prevent double-spending
-        agentWallet.setBalance(agentWallet.getBalance().subtract(amount));
-        walletRepository.save(agentWallet);
-
-        // Create a pending withdrawal transaction
-        Transaction transaction = Transaction.builder()
-                .wallet(agentWallet)
-                .amount(amount)
-                .transactionType(TransactionType.WITHDRAWAL_REQUEST)
-                .status(TransactionStatus.PENDING)
-                .build();
-
-        return transactionRepository.save(transaction);
-    }
-
-    @Transactional
-    public Claim raiseClaim(RaiseClaimRequest request, User currentUser) {
-        Agent agent = getAgentProfile(currentUser);
-        Policy policy = policyRepository.findById(request.getPolicyId())
-                .orElseThrow(() -> new ResourceNotFoundException("Policy not found with ID: " + request.getPolicyId()));
-
-        // Security check: ensure agent owns the policy
-        if (!policy.getAgent().getId().equals(agent.getId())) {
-            throw new SecurityException("You are not authorized to raise a claim for this policy.");
-        }
-
-        // Create the initial claim object. The file URLs will be added separately.
-        Claim newClaim = Claim.builder()
-                .policy(policy)
-                .description(request.getDescription())
-                .status(ClaimStatus.RAISED) // Initial status
-                // Set placeholder URLs - these MUST be updated by file uploads
-                .policeAbstractUrl("PENDING_UPLOAD")
-                .drivingLicenseUrl("PENDING_UPLOAD")
-                .logbookUrl("PENDING_UPLOAD")
-                .build();
-        
-        Claim savedClaim = claimRepository.save(newClaim);
-
-        // Notify the superagent
-        Superagent superagent = agent.getSuperagent();
-        String message = String.format("Agent %s has raised a new claim (ID: %d) for policy %d.",
-                agent.getUser().getFullName(), savedClaim.getId(), policy.getId());
-        notificationService.createNotification(agent.getUser(), superagent.getUser(), message);
-
-        return savedClaim;
-    }
-
-    @Transactional
-    public Policy uploadDocument(Long policyId, MultipartFile file, String documentType, User currentUser) {
-        Agent agent = getAgentProfile(currentUser);
-        Policy policy = policyRepository.findById(policyId)
-                .orElseThrow(() -> new ResourceNotFoundException("Policy not found with ID: " + policyId));
-
-        // Security check: ensure the agent owns the policy they're modifying
-        if (!policy.getAgent().getId().equals(agent.getId())) {
-            throw new SecurityException("You are not authorized to upload documents for this policy.");
-        }
+    public Policy uploadDocument(Long policyId, MultipartFile file, String documentType) {
+        // We call getPolicyDetailsForCurrentAgent, which handles getting the current
+        // agent and ensuring they own the policy. No need to get the agent again here.
+        Policy policy = getPolicyDetailsForCurrentAgent(policyId);
 
         String fileUrl;
         if ("LOGBOOK".equalsIgnoreCase(documentType)) {
@@ -204,5 +178,83 @@ public class AgentService {
         }
 
         return policyRepository.save(policy);
+    }
+
+    public Resource generateAndGetCertificate(Long policyId) {
+        Policy policy = getPolicyDetailsForCurrentAgent(policyId);
+        String certificatePathString = policy.getCertificateUrl();
+
+        if (certificatePathString == null || certificatePathString.isBlank()) {
+            throw new ResourceNotFoundException("Certificate not generated or found for this policy.");
+        }
+        
+        try {
+            // This path needs to be configured properly in your application.
+            Path filePath = Paths.get("uploads/certificates/").resolve(certificatePathString).normalize();
+            Resource resource = new UrlResource(filePath.toUri());
+            if (resource.exists() && resource.isReadable()) {
+                return resource;
+            } else {
+                throw new ResourceNotFoundException("Certificate file not found or is not readable: " + certificatePathString);
+            }
+        } catch (MalformedURLException e) {
+            throw new ResourceNotFoundException("Error reading certificate file path: " + certificatePathString, e);
+        }
+    }
+
+    // --- Claim Management ---
+
+    @Transactional(readOnly = true)
+    public List<Claim> findClaimsByCurrentAgent() {
+        Agent agent = getCurrentAgentProfile();
+        return claimRepository.findByPolicy_Agent(agent);
+    }
+
+    @Transactional(readOnly = true)
+    public Claim findClaimByIdForCurrentAgent(Long claimId) {
+        Agent agent = getCurrentAgentProfile();
+        Claim claim = claimRepository.findById(claimId)
+                .orElseThrow(() -> new ResourceNotFoundException("Claim not found with ID: " + claimId));
+        if (!claim.getPolicy().getAgent().getId().equals(agent.getId())) {
+            throw new SecurityException("You are not authorized to view this claim.");
+        }
+        return claim;
+    }
+
+    @Transactional
+    public Claim raiseClaim(RaiseClaimRequest request) {
+        Agent agent = getCurrentAgentProfile();
+        Policy policy = getPolicyDetailsForCurrentAgent(request.getPolicyId());
+
+        Claim newClaim = Claim.builder()
+                .policy(policy)
+                .description(request.getDescription())
+                .status(ClaimStatus.RAISED)
+                .policeAbstractUrl("PENDING_UPLOAD")
+                .drivingLicenseUrl("PENDING_UPLOAD")
+                .logbookUrl("PENDING_UPLOAD").build();
+        Claim savedClaim = claimRepository.save(newClaim);
+
+        String message = String.format("Agent %s has raised a new claim (ID: %d) for policy %d.",
+                agent.getUser().getFullName(), savedClaim.getId(), policy.getId());
+        notificationService.createNotification(agent.getUser(), agent.getSuperagent().getUser(), message);
+
+        return savedClaim;
+    }
+
+    // --- Private Helper Methods ---
+
+    private BigDecimal calculatePremium(Product product, BigDecimal insuredValue) {
+        switch (product.getCalculationType()) {
+            case PERCENTAGE_OF_VALUE:
+                if (insuredValue == null || insuredValue.compareTo(BigDecimal.ZERO) <= 0) {
+                    throw new IllegalArgumentException("Insured value must be provided for percentage-based products.");
+                }
+                return insuredValue.multiply(product.getRate()).divide(BigDecimal.valueOf(100));
+            case FLAT_RATE:
+                return product.getRate();
+            default:
+                throw new IllegalStateException("Unknown calculation type: " + product.getCalculationType());
+        }
     }
 }

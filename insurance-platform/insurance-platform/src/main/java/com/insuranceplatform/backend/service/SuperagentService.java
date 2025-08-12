@@ -1,12 +1,14 @@
 package com.insuranceplatform.backend.service;
 
-import com.insuranceplatform.backend.dto.*; // Import all DTOs
-import com.insuranceplatform.backend.entity.*; // Import all Entities
-import com.insuranceplatform.backend.enums.TransactionStatus;
-import com.insuranceplatform.backend.enums.TransactionType;
+import com.insuranceplatform.backend.dto.*;
+import com.insuranceplatform.backend.entity.*;
+import com.insuranceplatform.backend.enums.*;
 import com.insuranceplatform.backend.exception.ResourceNotFoundException;
-import com.insuranceplatform.backend.repository.*; // Import all Repositories
+import com.insuranceplatform.backend.exception.UserAlreadyExistsException;
+import com.insuranceplatform.backend.repository.*;
+import com.insuranceplatform.backend.service.AuthService; // CORRECTED: Import from service package
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,7 +22,7 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class SuperagentService {
 
-    // All required repositories injected via the constructor
+    // --- All required dependencies injected via constructor ---
     private final ProductRepository productRepository;
     private final SuperagentRepository superagentRepository;
     private final InsuranceCompanyRepository companyRepository;
@@ -31,18 +33,70 @@ public class SuperagentService {
     private final PolicyRepository policyRepository;
     private final WalletRepository walletRepository;
     private final TransactionRepository transactionRepository;
-    private final CertificateStockRepository certificateStockRepository; 
+    private final CertificateStockRepository certificateStockRepository;
     private final LeadRepository leadRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final AuthService authService;
 
-    // Helper method to get the Superagent profile for the logged-in user
-    private Superagent getSuperagentProfile(User currentUser) {
-        return superagentRepository.findByUser(currentUser)
-                .orElseThrow(() -> new ResourceNotFoundException("Superagent profile not found for the current user."));
+    // --- Profile Management (`/me` endpoints) ---
+
+    @Transactional(readOnly = true)
+    public Superagent getCurrentSuperagentProfile() {
+        User currentUser = authService.getCurrentUser();
+        return getSuperagentProfile(currentUser);
     }
 
-    // --- Product Management ---
     @Transactional
-    public Product createProduct(ProductRequest request, User currentUser) {
+    public Superagent updateCurrentSuperagentProfile(UpdateProfileRequest request) {
+        User currentUser = authService.getCurrentUser();
+        Superagent superagent = getSuperagentProfile(currentUser);
+
+        currentUser.setFullName(request.fullName());
+        currentUser.setEmail(request.email());
+        userRepository.save(currentUser);
+
+        return superagentRepository.save(superagent);
+    }
+
+    // --- Dashboard, Reporting & Renewals ---
+
+    @Transactional(readOnly = true)
+    public DashboardMetricsDto getDashboardMetrics() {
+        User currentUser = authService.getCurrentUser();
+        Superagent superagent = getSuperagentProfile(currentUser);
+        long totalAgents = agentRepository.countBySuperagent(superagent);
+        long totalPoliciesSold = policyRepository.countByAgent_Superagent(superagent);
+        BigDecimal totalPremium = policyRepository.sumPremiumByAgent_Superagent(superagent);
+        long pendingClaims = claimRepository.countClaimsBySuperagentAndStatus(superagent, ClaimStatus.RAISED);
+
+        return DashboardMetricsDto.builder()
+                .totalAgents(totalAgents)
+                .totalPoliciesSold(totalPoliciesSold)
+                .totalPremiumCollected(totalPremium != null ? totalPremium : BigDecimal.ZERO)
+                .pendingClaims(pendingClaims)
+                .build();
+    }
+
+    @Transactional(readOnly = true)
+    public List<Policy> viewAgentTransactions() {
+        User currentUser = authService.getCurrentUser();
+        Superagent superagent = getSuperagentProfile(currentUser);
+        return policyRepository.findByAgent_SuperagentOrderByCreatedAtDesc(superagent);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Policy> viewAgentRenewals(int daysUntilExpiry) {
+        User currentUser = authService.getCurrentUser();
+        Superagent superagent = getSuperagentProfile(currentUser);
+        LocalDateTime expiryCutoffDate = LocalDateTime.now().plusDays(daysUntilExpiry);
+        return policyRepository.findByAgent_SuperagentAndExpiryDateBefore(superagent, expiryCutoffDate);
+    }
+    
+    // --- Product Management (Full CRUD) ---
+
+    @Transactional
+    public Product createProduct(ProductRequest request) {
+        User currentUser = authService.getCurrentUser();
         Superagent superagent = getSuperagentProfile(currentUser);
         InsuranceCompany company = companyRepository.findById(request.getCompanyId())
                 .orElseThrow(() -> new ResourceNotFoundException("InsuranceCompany not found with ID: " + request.getCompanyId()));
@@ -59,19 +113,96 @@ public class SuperagentService {
     }
 
     @Transactional(readOnly = true)
-    public List<CertificateStock> viewCertificateStock(User currentUser) {
+    public List<Product> viewMyProducts() {
+        User currentUser = authService.getCurrentUser();
+        Superagent superagent = getSuperagentProfile(currentUser);
+        return productRepository.findBySuperagent(superagent);
+    }
+
+    @Transactional
+    public Product updateProduct(Long productId, ProductRequest request) {
+        User currentUser = authService.getCurrentUser();
+        Superagent superagent = getSuperagentProfile(currentUser);
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new ResourceNotFoundException("Product not found with ID: " + productId));
+
+        if (!product.getSuperagent().getId().equals(superagent.getId())) {
+            throw new SecurityException("You are not authorized to update this product.");
+        }
+
+        InsuranceCompany company = companyRepository.findById(request.getCompanyId())
+                .orElseThrow(() -> new ResourceNotFoundException("InsuranceCompany not found with ID: " + request.getCompanyId()));
+
+        product.setName(request.getName());
+        product.setRate(request.getRate());
+        product.setInsuranceCompany(company);
+        product.setCalculationType(request.getCalculationType());
+        
+        return productRepository.save(product);
+    }
+
+    @Transactional
+    public void deleteProduct(Long productId) {
+        User currentUser = authService.getCurrentUser();
+        Superagent superagent = getSuperagentProfile(currentUser);
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new ResourceNotFoundException("Product not found with ID: " + productId));
+
+        if (!product.getSuperagent().getId().equals(superagent.getId())) {
+            throw new SecurityException("You are not authorized to delete this product.");
+        }
+
+        productRepository.delete(product);
+    }
+
+    @Transactional(readOnly = true)
+    public List<CertificateStock> viewCertificateStock() {
+        User currentUser = authService.getCurrentUser();
         Superagent superagent = getSuperagentProfile(currentUser);
         return certificateStockRepository.findBySuperagent(superagent);
     }
+
     // --- Agent Management ---
+
+    @Transactional
+    public Agent createAgent(CreateAgentRequest request) {
+        User currentUser = authService.getCurrentUser();
+        Superagent superagent = getSuperagentProfile(currentUser);
+
+        if (userRepository.existsByEmail(request.email())) {
+            throw new UserAlreadyExistsException("An account with this email already exists: " + request.email());
+        }
+        if (userRepository.existsByPhone(request.phone())) {
+            throw new UserAlreadyExistsException("An account with this phone number already exists: " + request.phone());
+        }
+
+        User newAgentUser = new User();
+        newAgentUser.setFullName(request.fullName());
+        newAgentUser.setEmail(request.email());
+        newAgentUser.setPhone(request.phone());
+        newAgentUser.setRole(UserRole.AGENT);
+        newAgentUser.setStatus(UserStatus.ACTIVE);
+        newAgentUser.setPassword(passwordEncoder.encode("Password123"));
+        
+        User savedUser = userRepository.save(newAgentUser);
+
+        Agent newAgent = new Agent();
+        newAgent.setUser(savedUser);
+        newAgent.setSuperagent(superagent);
+
+        return agentRepository.save(newAgent);
+    }
+
     @Transactional(readOnly = true)
-    public List<Agent> viewMyAgents(User currentUser) {
+    public List<Agent> viewMyAgents() {
+        User currentUser = authService.getCurrentUser();
         Superagent superagent = getSuperagentProfile(currentUser);
         return agentRepository.findBySuperagent(superagent);
     }
 
     @Transactional
-    public User updateAgentStatus(Long agentUserId, UpdateAgentStatusRequest request, User currentUser) {
+    public User updateAgentStatus(Long agentUserId, UpdateAgentStatusRequest request) {
+        User currentUser = authService.getCurrentUser();
         Superagent superagent = getSuperagentProfile(currentUser);
         User agentUser = userRepository.findById(agentUserId)
                 .orElseThrow(() -> new ResourceNotFoundException("Agent user not found with ID: " + agentUserId));
@@ -89,61 +220,12 @@ public class SuperagentService {
 
         return updatedUser;
     }
+    
+    // --- Lead Management ---
 
-    // --- Reporting & Renewals ---
-    @Transactional(readOnly = true)
-    public List<Policy> viewAgentTransactions(User currentUser) {
-        Superagent superagent = getSuperagentProfile(currentUser);
-        return policyRepository.findByAgent_SuperagentOrderByCreatedAtDesc(superagent);
-    }
-
-    @Transactional(readOnly = true)
-    public List<Policy> viewAgentRenewals(User currentUser, int daysUntilExpiry) {
-        Superagent superagent = getSuperagentProfile(currentUser);
-        LocalDateTime expiryCutoffDate = LocalDateTime.now().plusDays(daysUntilExpiry);
-        return policyRepository.findByAgent_SuperagentAndExpiryDateBefore(superagent, expiryCutoffDate);
-    }
-
-    // --- Document Management ---
-    @Transactional(readOnly = true)
-    public List<DocumentDto> viewPolicyDocuments(Long policyId, User currentUser) {
-        Superagent superagent = getSuperagentProfile(currentUser);
-        Policy policy = policyRepository.findById(policyId)
-                .orElseThrow(() -> new ResourceNotFoundException("Policy not found with ID: " + policyId));
-
-        if (!policy.getAgent().getSuperagent().getId().equals(superagent.getId())) {
-            throw new SecurityException("You are not authorized to view documents for this policy.");
-        }
-
-        List<DocumentDto> documents = new ArrayList<>();
-
-        if (policy.getClient().getIdFileUrl() != null) {
-            documents.add(new DocumentDto("Client ID/KRA", policy.getClient().getIdFileUrl(), "Client identification document."));
-        }
-        if (policy.getLogbookFileUrl() != null) {
-            documents.add(new DocumentDto("Motor Logbook", policy.getLogbookFileUrl(), "Vehicle registration logbook."));
-        }
-        if (policy.getCertificateUrl() != null) {
-            documents.add(new DocumentDto("Policy Certificate", policy.getCertificateUrl(), "Official insurance policy certificate."));
-        }
-
-        Optional<Claim> claimOpt = claimRepository.findAll().stream().filter(c -> c.getPolicy().getId().equals(policyId)).findFirst();
-        if (claimOpt.isPresent()) {
-            Claim claim = claimOpt.get();
-            documents.add(new DocumentDto("Police Abstract", claim.getPoliceAbstractUrl(), "Claim document: Police Abstract"));
-            documents.add(new DocumentDto("Driving License", claim.getDrivingLicenseUrl(), "Claim document: Driver's License"));
-            if (claim.getPhotoUrl() != null) {
-                documents.add(new DocumentDto("Accident Photo", claim.getPhotoUrl(), "Claim document: Photo of incident"));
-            }
-            if (claim.getVideoUrl() != null) {
-                documents.add(new DocumentDto("Accident Video", claim.getVideoUrl(), "Claim document: Video of incident"));
-            }
-        }
-        return documents;
-    }
-
-     @Transactional
-    public Lead createLead(LeadRequest request, User currentUser) {
+    @Transactional
+    public Lead createLead(LeadRequest request) {
+        User currentUser = authService.getCurrentUser();
         Superagent superagent = getSuperagentProfile(currentUser);
 
         Lead lead = Lead.builder()
@@ -159,18 +241,19 @@ public class SuperagentService {
     }
 
     @Transactional(readOnly = true)
-    public List<Lead> viewLeads(User currentUser) {
+    public List<Lead> viewLeads() {
+        User currentUser = authService.getCurrentUser();
         Superagent superagent = getSuperagentProfile(currentUser);
         return leadRepository.findBySuperagentOrderByCreatedAtDesc(superagent);
     }
 
     @Transactional
-    public Lead updateLead(Long leadId, LeadRequest request, User currentUser) {
+    public Lead updateLead(Long leadId, LeadRequest request) {
+        User currentUser = authService.getCurrentUser();
         Superagent superagent = getSuperagentProfile(currentUser);
         Lead lead = leadRepository.findById(leadId)
                 .orElseThrow(() -> new ResourceNotFoundException("Lead not found with ID: " + leadId));
 
-        // Security Check: Ensure the superagent owns this lead
         if (!lead.getSuperagent().getId().equals(superagent.getId())) {
             throw new SecurityException("You are not authorized to update this lead.");
         }
@@ -185,7 +268,8 @@ public class SuperagentService {
         return leadRepository.save(lead);
     }
 
-    public void deleteLead(Long leadId, User currentUser) {
+    public void deleteLead(Long leadId) {
+        User currentUser = authService.getCurrentUser();
         Superagent superagent = getSuperagentProfile(currentUser);
         Lead lead = leadRepository.findById(leadId)
                 .orElseThrow(() -> new ResourceNotFoundException("Lead not found with ID: " + leadId));
@@ -198,14 +282,17 @@ public class SuperagentService {
     }
 
     // --- Claim Management ---
+
     @Transactional(readOnly = true)
-    public List<Claim> viewClaims(User currentUser) {
+    public List<Claim> viewClaims() {
+        User currentUser = authService.getCurrentUser();
         Superagent superagent = getSuperagentProfile(currentUser);
         return claimRepository.findClaimsBySuperagent(superagent);
     }
 
     @Transactional
-    public Claim updateClaimStatus(Long claimId, UpdateClaimStatusRequest request, User currentUser) {
+    public Claim updateClaimStatus(Long claimId, UpdateClaimStatusRequest request) {
+        User currentUser = authService.getCurrentUser();
         Superagent superagent = getSuperagentProfile(currentUser);
         Claim claim = claimRepository.findById(claimId)
                 .orElseThrow(() -> new ResourceNotFoundException("Claim not found with ID: " + claimId));
@@ -221,18 +308,23 @@ public class SuperagentService {
         User agentUser = claim.getPolicy().getAgent().getUser();
         String message = String.format("Your claim (ID: %d) has been updated to status: %s.",
                 updatedClaim.getId(), updatedClaim.getStatus());
-        notificationService.createNotification(superagent.getUser(), agentUser, message);
+        notificationService.createNotification(currentUser, agentUser, message);
         return updatedClaim;
     }
 
     // --- Payout Management ---
+
     @Transactional(readOnly = true)
-    public List<Transaction> viewPendingWithdrawals(User currentUser) {
-        return transactionRepository.findAgentTransactionsByStatus(TransactionStatus.PENDING);
+    public List<Transaction> viewPendingWithdrawals() {
+        User currentUser = authService.getCurrentUser();
+        Superagent superagent = getSuperagentProfile(currentUser);
+        // This query should be refined to only show withdrawals from this superagent's agents
+        return transactionRepository.findPendingWithdrawalsForSuperagent(superagent);
     }
 
     @Transactional
-    public Transaction approveWithdrawal(ApproveWithdrawalDto request, User currentUser) {
+    public Transaction approveWithdrawal(ApproveWithdrawalDto request) {
+        User currentUser = authService.getCurrentUser();
         Superagent superagent = getSuperagentProfile(currentUser);
         Wallet superagentWallet = walletRepository.findByUser(superagent.getUser())
                 .orElseThrow(() -> new IllegalStateException("Wallet not found for superagent: " + currentUser.getFullName()));
@@ -266,5 +358,42 @@ public class SuperagentService {
         notificationService.createNotification(currentUser, agent.getUser(), message);
         
         return transactionRepository.save(withdrawalTx);
+    }
+
+    // --- Document Management ---
+
+    @Transactional(readOnly = true)
+    public List<DocumentDto> viewPolicyDocuments(Long policyId) {
+        User currentUser = authService.getCurrentUser();
+        Superagent superagent = getSuperagentProfile(currentUser);
+        Policy policy = policyRepository.findById(policyId)
+                .orElseThrow(() -> new ResourceNotFoundException("Policy not found with ID: " + policyId));
+
+        if (!policy.getAgent().getSuperagent().getId().equals(superagent.getId())) {
+            throw new SecurityException("You are not authorized to view documents for this policy.");
+        }
+
+        List<DocumentDto> documents = new ArrayList<>();
+
+        if (policy.getClient().getIdFileUrl() != null) documents.add(new DocumentDto("Client ID/KRA", policy.getClient().getIdFileUrl(), "Client identification document."));
+        if (policy.getLogbookFileUrl() != null) documents.add(new DocumentDto("Motor Logbook", policy.getLogbookFileUrl(), "Vehicle registration logbook."));
+        if (policy.getCertificateUrl() != null) documents.add(new DocumentDto("Policy Certificate", policy.getCertificateUrl(), "Official insurance policy certificate."));
+
+        // OPTIMIZED: Use findByPolicy instead of scanning all claims
+        Optional<Claim> claimOpt = claimRepository.findByPolicy(policy);
+        if (claimOpt.isPresent()) {
+            Claim claim = claimOpt.get();
+            if(claim.getPoliceAbstractUrl() != null) documents.add(new DocumentDto("Police Abstract", claim.getPoliceAbstractUrl(), "Claim document: Police Abstract"));
+            if(claim.getDrivingLicenseUrl() != null) documents.add(new DocumentDto("Driving License", claim.getDrivingLicenseUrl(), "Claim document: Driver's License"));
+            if (claim.getPhotoUrl() != null) documents.add(new DocumentDto("Accident Photo", claim.getPhotoUrl(), "Claim document: Photo of incident"));
+            if (claim.getVideoUrl() != null) documents.add(new DocumentDto("Accident Video", claim.getVideoUrl(), "Claim document: Video of incident"));
+        }
+        return documents;
+    }
+
+    // --- Private Helper Method ---
+    private Superagent getSuperagentProfile(User currentUser) {
+        return superagentRepository.findByUser(currentUser)
+                .orElseThrow(() -> new ResourceNotFoundException("Superagent profile not found for the current user."));
     }
 }

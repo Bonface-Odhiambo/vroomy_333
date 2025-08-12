@@ -20,6 +20,8 @@ import com.insuranceplatform.backend.util.IraApiValidator; // Import the validat
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,6 +38,8 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final AuthenticationManager authenticationManager;
+
+
 
     @Transactional
     public AuthResponse register(RegisterRequest request) {
@@ -94,7 +98,26 @@ public class AuthService {
                 .build();
     }
 
-    // ... authenticate method remains the same ...
+    public User getCurrentUser() {
+        // Get the principal object from Spring Security's context. This holds the user's identity.
+        Object principal = SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+
+        String username;
+        if (principal instanceof UserDetails) {
+            // The standard case: the principal is a UserDetails object.
+            username = ((UserDetails) principal).getUsername();
+        } else {
+            // A fallback case, though less common in a typical setup.
+            username = principal.toString();
+        }
+
+        // Use the username (which is the user's email in our app) to fetch the full User entity.
+        return userRepository.findByEmail(username)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found in security context: " + username));
+    }
+
+
+   
     public AuthResponse authenticate(AuthRequest request) {
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(
