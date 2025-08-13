@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.GetMapping; 
 import org.springframework.web.bind.annotation.PathVariable;
 import com.insuranceplatform.backend.dto.PaybillDetailsDto;
+import com.insuranceplatform.backend.dto.B2CResultCallback;
 
 
 @RestController
@@ -31,6 +32,21 @@ public class PaymentController {
     public ResponseEntity<PaybillDetailsDto> getPaybillDetails(@PathVariable Long policyId) {
         PaybillDetailsDto details = mpesaService.getPaybillDetails(policyId);
         return ResponseEntity.ok(details);
+    }
+    @PostMapping("/b2c-result")
+    public ResponseEntity<Void> b2cResultCallback(@RequestBody B2CResultCallback callback) {
+        mpesaService.processB2CResultCallback(callback);
+        return ResponseEntity.ok().build();
+    }
+
+    /**
+     * Public callback URL for Safaricom to post if a B2C transaction times out.
+     */
+    @PostMapping("/b2c-timeout")
+    public ResponseEntity<Void> b2cTimeoutCallback(@RequestBody Object timeoutPayload) {
+        // Log the timeout payload and handle it (e.g., mark transaction as timed out)
+        System.err.println("Received B2C Timeout: " + timeoutPayload.toString());
+        return ResponseEntity.ok().build();
     }
 
     // This is the public callback URL Safaricom would call.
